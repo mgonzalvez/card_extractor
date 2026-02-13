@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Martin's Card Extractor</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Fraunces:opsz,wght@9..144,600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <div class="bg-orb orb-a"></div>
+    <div class="bg-orb orb-b"></div>
+
+    <main class="app-shell">
+      <header class="hero">
+        <p class="eyebrow">Private in-browser app to extract individual card images from uploaded PnP PDFs.</p>
+        <h1>Martin's Card Extractor</h1>
+        <p class="hero-copy">
+          Build one grid on a reference page, fine-tune the grid lines, then apply that same slicer to all pages.
+        </p>
+      </header>
+
+      <section class="panel" id="upload-panel">
+        <div class="panel-head">
+          <h2>1. Upload PDF</h2>
+          <span class="status-pill" id="engine-status">Loading engines…</span>
+        </div>
+        <label class="file-drop" for="pdf-input">
+          <input id="pdf-input" type="file" accept="application/pdf" />
+          <strong>Drop a PDF or click to browse</strong>
+          <span>Supports vector and scanned pages. No files leave your device.</span>
+        </label>
+        <div class="hint-row" id="doc-meta"></div>
+      </section>
+
+      <section class="panel controls" id="workflow-panel" hidden>
+        <div class="panel-head">
+          <h2>2. Build Grid Slicer</h2>
+          <div class="inline-actions">
+            <button id="reset-grid-btn" class="btn ghost">Start Over Grid</button>
+            <button id="apply-grid-btn" class="btn solid">Apply Grid to All Pages</button>
+          </div>
+        </div>
+        <div class="workflow-note">
+          <strong>Quick workflow</strong>
+          <ol class="workflow-steps">
+            <li>Set grid rows and columns.</li>
+            <li>Click and drag on the preview to draw one box around the full image area.</li>
+            <li>Drag grid lines to align with cuts, then click regions you want excluded (gutter/bleed).</li>
+            <li>Click <strong>Apply Grid to All Pages</strong>, then build and download the ZIP.</li>
+          </ol>
+        </div>
+        <p class="workflow-tip">
+          Tip: if you change rows/columns after drawing the area, click <strong>Start Over Grid</strong> and redraw so the new structure is applied.
+          v1 currently supports traditional duplex grid PDFs only (fronts and backs on separate pages), not gutterfold layouts.
+        </p>
+
+        <div class="controls-grid">
+          <label>
+            Page
+            <select id="page-select"></select>
+          </label>
+
+          <label>
+            Page role
+            <select id="page-role-select">
+              <option value="front">Fronts</option>
+              <option value="back">Backs</option>
+                          </select>
+          </label>
+
+          <label>
+            Grid rows
+            <select id="grid-rows-input">
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+
+          <label>
+            Grid columns
+            <select id="grid-cols-input">
+              <option value="0">0</option>
+              <option value="1">1</option>
+              <option value="2">2</option>
+              <option value="3" selected>3</option>
+              <option value="4">4</option>
+              <option value="5">5</option>
+              <option value="6">6</option>
+              <option value="7">7</option>
+              <option value="8">8</option>
+              <option value="9">9</option>
+              <option value="10">10</option>
+            </select>
+          </label>
+
+          <label>
+            Output card size
+            <select id="size-preset-select">
+              <option value="native">Native (detected)</option>
+              <option value="poker">Poker (2.5 x 3.5 in)</option>
+              <option value="tarot">Tarot (2.75 x 4.75 in)</option>
+              <option value="mini">Mini (1.75 x 2.5 in)</option>
+            </select>
+          </label>
+
+        </div>
+
+        <div class="editor-layout">
+          <div class="canvas-wrap">
+            <canvas id="page-canvas" width="1200" height="1600"></canvas>
+          </div>
+          <aside class="summary-box">
+            <h3>Current Selection</h3>
+            <p id="selection-readout">Grid mode: initialize and adjust grid lines.</p>
+            <p id="grid-readout">Grid slicer: not initialized</p>
+            <p class="mini-help">
+              Drag divider handles to move grid lines. Click any region to toggle include/exclude for export.
+            </p>
+            <h3>Document Stats</h3>
+            <ul class="stats-list">
+              <li><span>Pages</span><strong id="stat-pages">0</strong></li>
+              <li><span>Cards</span><strong id="stat-cards">0</strong></li>
+              <li><span>Fronts</span><strong id="stat-fronts">0</strong></li>
+              <li><span>Backs</span><strong id="stat-backs">0</strong></li>
+            </ul>
+          </aside>
+        </div>
+
+        <div class="bottom-apply-row">
+          <button id="apply-grid-btn-bottom" class="btn solid">Apply Grid to All Pages</button>
+        </div>
+      </section>
+
+      <section class="panel" id="export-panel" hidden>
+        <div class="panel-head">
+          <h2>3. Export ZIP</h2>
+        </div>
+        <p>
+          Exports PNG files in <code>fronts/</code> and <code>backs/</code>. Duplicate backs are
+          collapsed to a single file.
+        </p>
+        <label class="export-option">
+          <input id="single-back-toggle" type="checkbox" />
+          All card backs are identical (export one back file)
+        </label>
+        <button id="export-btn" class="btn solid zip-btn">
+          <span id="export-btn-label">Build ZIP</span>
+          <span class="zip-progress"><span id="export-progress-fill"></span></span>
+        </button>
+        <a id="download-link" class="btn download" hidden download="cards.zip">Download cards.zip</a>
+      </section>
+
+      <footer class="footer-note">
+        Processing happens in-browser with PDF.js, OpenCV.js, and JSZip.
+      </footer>
+    </main>
+
+    <script src="https://docs.opencv.org/4.x/opencv.js" async></script>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
