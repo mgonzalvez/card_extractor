@@ -9,21 +9,27 @@ Private, in-browser web app for extracting individual card images from printable
 - Client-side processing only (no file uploads to a server)
 - PNG export packaged as ZIP with `fronts/` and `backs/`
 
-## Current v1 Limitation
+## Supported v1 Workflows
 
-- Accepts traditional duplex PnP card-grid PDFs (fronts and backs on separate pages)
-- Gutterfold layouts are not supported yet
+- Traditional duplex PnP grid PDFs (fronts and backs on separate pages)
+- Gutterfold PDFs with automatic thin-gutter detection on page 1 and click-to-remove gutter adjustments
 
 ## Current Features
 
 - Upload PDF files (vector or scanned/flattened)
 - Page role assignment per page: `front` or `back`
-- Grid rows/columns controls via dropdown (`0` to `10`, default `3x3`)
+- Grid row/column region controls via dropdown (`0` to `10`, default `3x3`)
+- Two upload areas at start:
+  - Traditional Duplex upload area defaults to `3x3`
+  - Gutterfold upload area defaults to `4x2` with auto-gutter detection
+- Gutterfold front-column control (`left`/`right`) to correctly split exports into `fronts/` and `backs/`
 - Draw one grid bounds box directly on the preview canvas
 - Drag grid divider lines with large handles for fine alignment
 - Click regions to include/exclude spacing areas from export
+- In gutterfold mode, every region must be explicitly designated CARD or GUTTER before export
 - Apply one grid profile to all pages
 - Start-over grid action to quickly redraw bounds and rebuild the grid
+- Optional orientation check step with separate 90° rotation controls for front and back samples
 - Output sizing options:
   - Native
   - Poker (2.5 x 3.5 in)

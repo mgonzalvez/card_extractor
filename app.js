@@ -10,6 +10,12 @@ const CARD_PRESETS = {
   mini: { widthIn: 1.75, heightIn: 2.5 },
 };
 
+const WORKFLOW_DEFAULTS = {
+  duplex: { rows: 3, cols: 3 },
+  gutterfold: { rows: 4, cols: 2 },
+};
+const THEME_STORAGE_KEY = "cardExtractorTheme";
+
 const state = {
   pdfDoc: null,
   pages: [],
@@ -17,18 +23,11 @@ const state = {
   selectedCardId: null,
   canvasScale: 1,
   dragState: null,
-  addMode: false,
-  cvReady: false,
+  hasActiveDocument: false,
   downloadUrl: null,
-  templates: {
-    front: null,
-    back: null,
-  },
-  frontCalibration: {
-    anchors: { a: null, b: null, c: null },
-    outliersByPage: new Map(),
-    showOutliersOnly: false,
-  },
+  workflowType: "duplex",
+  gutterfoldFrontColumn: "left",
+  exportRotation: { front: 0, back: 0 },
   gridSlicer: {
     active: false,
     awaitingBounds: false,
@@ -50,33 +49,26 @@ const state = {
 
 const els = {
   engineStatus: document.querySelector("#engine-status"),
-  pdfInput: document.querySelector("#pdf-input"),
+  pdfInputDuplex: document.querySelector("#pdf-input-duplex"),
+  pdfInputGutterfold: document.querySelector("#pdf-input-gutterfold"),
   docMeta: document.querySelector("#doc-meta"),
   workflowPanel: document.querySelector("#workflow-panel"),
+  uploadPanel: document.querySelector("#upload-panel"),
+  orientationPanel: document.querySelector("#orientation-panel"),
   exportPanel: document.querySelector("#export-panel"),
   pageSelect: document.querySelector("#page-select"),
+  pageRoleField: document.querySelector("#page-role-field"),
   pageRoleSelect: document.querySelector("#page-role-select"),
-  minAreaInput: document.querySelector("#min-area-input"),
-  aspectModeSelect: document.querySelector("#aspect-mode-select"),
+  gutterfoldFrontColumnField: document.querySelector("#gutterfold-front-column-field"),
+  gutterfoldFrontColumnSelect: document.querySelector("#gutterfold-front-column-select"),
   sizePresetSelect: document.querySelector("#size-preset-select"),
   resetGridBtn: document.querySelector("#reset-grid-btn"),
   applyGridBtn: document.querySelector("#apply-grid-btn"),
   applyGridBtnBottom: document.querySelector("#apply-grid-btn-bottom"),
   gridRowsInput: document.querySelector("#grid-rows-input"),
   gridColsInput: document.querySelector("#grid-cols-input"),
-  addBoxBtn: document.querySelector("#add-box-btn"),
-  deleteBoxBtn: document.querySelector("#delete-box-btn"),
-  toggleLabelBtn: document.querySelector("#toggle-label-btn"),
-  rotateLeftBtn: document.querySelector("#rotate-left-btn"),
-  rotateRightBtn: document.querySelector("#rotate-right-btn"),
-  setFrontTemplateBtn: document.querySelector("#set-front-template-btn"),
-  setBackTemplateBtn: document.querySelector("#set-back-template-btn"),
-  applyTemplatesBtn: document.querySelector("#apply-templates-btn"),
-  setAnchorABtn: document.querySelector("#set-anchor-a-btn"),
-  setAnchorBBtn: document.querySelector("#set-anchor-b-btn"),
-  setAnchorCBtn: document.querySelector("#set-anchor-c-btn"),
-  calibrateFrontGridBtn: document.querySelector("#calibrate-front-grid-btn"),
-  toggleOutliersBtn: document.querySelector("#toggle-outliers-btn"),
+  gridRowsLabel: document.querySelector("#grid-rows-label"),
+  gridColsLabel: document.querySelector("#grid-cols-label"),
   exportBtn: document.querySelector("#export-btn"),
   exportBtnLabel: document.querySelector("#export-btn-label"),
   exportProgressFill: document.querySelector("#export-progress-fill"),
@@ -84,8 +76,12 @@ const els = {
   singleBackToggle: document.querySelector("#single-back-toggle"),
   pageCanvas: document.querySelector("#page-canvas"),
   selectionReadout: document.querySelector("#selection-readout"),
-  templateReadout: document.querySelector("#template-readout"),
-  calibrationReadout: document.querySelector("#calibration-readout"),
+  workflowTip: document.querySelector("#workflow-tip"),
+  themeToggleBtn: document.querySelector("#theme-toggle-btn"),
+  frontPreviewCanvas: document.querySelector("#front-preview-canvas"),
+  backPreviewCanvas: document.querySelector("#back-preview-canvas"),
+  frontRotateBtn: document.querySelector("#front-rotate-btn"),
+  backRotateBtn: document.querySelector("#back-rotate-btn"),
   gridReadout: document.querySelector("#grid-readout"),
   statPages: document.querySelector("#stat-pages"),
   statCards: document.querySelector("#stat-cards"),
@@ -100,24 +96,98 @@ function setEngineStatus(text, good = false) {
   els.engineStatus.style.color = good ? "var(--ok)" : "var(--muted)";
 }
 
-async function waitForOpenCv(timeoutMs = 20000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    if (window.cv && typeof window.cv.imread === "function") {
-      return true;
-    }
-    await new Promise((r) => setTimeout(r, 120));
+function resolveInitialTheme() {
+  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  if (saved === "light" || saved === "dark") return saved;
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.body.setAttribute("data-theme", next);
+  localStorage.setItem(THEME_STORAGE_KEY, next);
+  if (els.themeToggleBtn) {
+    const label = next === "dark" ? "Light Mode" : "Dark Mode";
+    els.themeToggleBtn.textContent = label;
+    els.themeToggleBtn.setAttribute("aria-label", label);
   }
-  return false;
+}
+
+function isGutterfoldMode() {
+  return state.workflowType === "gutterfold";
+}
+
+function updateWorkflowCopy() {
+  if (!els.workflowTip) return;
+  if (isGutterfoldMode()) {
+    els.workflowTip.innerHTML =
+      "Gutterfold mode: set which side contains fronts, then define row/column region counts. Thin white spacer bands are auto-detected as <strong>GUTTER</strong>; click any missed gutter band to mark it as gutter.";
+    return;
+  }
+  els.workflowTip.innerHTML =
+    "Tip: if you change rows/columns after drawing the area, click <strong>Start Over Grid</strong> and redraw so the new structure is applied.";
+}
+
+function applyWorkflowDefaults() {
+  const cfg = WORKFLOW_DEFAULTS[state.workflowType] || WORKFLOW_DEFAULTS.duplex;
+  if (els.gridRowsInput) els.gridRowsInput.value = String(cfg.rows);
+  if (els.gridColsInput) els.gridColsInput.value = String(cfg.cols);
+  if (els.gridRowsLabel) {
+    els.gridRowsLabel.textContent = isGutterfoldMode() ? "Grid row regions" : "Grid row lines";
+  }
+  if (els.gridColsLabel) {
+    els.gridColsLabel.textContent = isGutterfoldMode() ? "Grid column regions" : "Grid column lines";
+  }
+  updateWorkflowCopy();
+  const gutterfold = isGutterfoldMode();
+  if (els.pageRoleField) {
+    els.pageRoleField.hidden = gutterfold;
+    els.pageRoleField.style.display = gutterfold ? "none" : "";
+  }
+  if (els.pageRoleSelect) els.pageRoleSelect.disabled = gutterfold;
+  if (els.gutterfoldFrontColumnField) {
+    els.gutterfoldFrontColumnField.hidden = !gutterfold;
+    els.gutterfoldFrontColumnField.style.display = gutterfold ? "" : "none";
+  }
+  if (els.gutterfoldFrontColumnSelect) {
+    els.gutterfoldFrontColumnSelect.disabled = !gutterfold;
+    els.gutterfoldFrontColumnSelect.value = state.gutterfoldFrontColumn;
+  }
+  if (gutterfold && state.pages.length) {
+    for (const page of state.pages) {
+      page.role = "front";
+      for (const card of page.cards) {
+        card.label = card.label === "back" ? "back" : "front";
+      }
+    }
+    syncStats();
+  }
+}
+
+function setWorkflowType(type) {
+  const next = type === "gutterfold" ? "gutterfold" : "duplex";
+  const changed = state.workflowType !== next;
+  state.workflowType = next;
+  applyWorkflowDefaults();
+  if (changed && state.pages.length) {
+    beginGridBoundsDraw();
+    syncStats();
+    drawCurrentPage();
+    setEngineStatus("Workflow changed. Redraw the grid area for this format.");
+  }
+}
+
+function updateUploadLockUi() {
+  const locked = !!state.hasActiveDocument;
+  if (els.pdfInputDuplex) els.pdfInputDuplex.disabled = locked;
+  if (els.pdfInputGutterfold) els.pdfInputGutterfold.disabled = locked;
+  if (els.uploadPanel) {
+    els.uploadPanel.classList.toggle("panel-locked", locked);
+  }
 }
 
 function setBusy(on, label = "Working…") {
-  if (els.autodetectBtn) els.autodetectBtn.disabled = on;
   if (els.exportBtn) els.exportBtn.disabled = on;
-  if (els.resetPageBtn) els.resetPageBtn.disabled = on;
-  if (els.applyTemplatesBtn) {
-    els.applyTemplatesBtn.disabled = on;
-  }
   if (on) {
     setEngineStatus(label);
   } else {
@@ -192,7 +262,10 @@ async function renderPdfPage(pageNumber, scale = 2.25) {
   return { canvas, page, viewport };
 }
 
-function pageRoleByIndex(index, total) {
+function pageRoleByIndex(index, total, workflowType = state.workflowType) {
+  if (workflowType === "gutterfold") {
+    return "front";
+  }
   if (total >= 2 && total % 2 === 0) {
     return index % 2 === 0 ? "front" : "back";
   }
@@ -203,15 +276,15 @@ async function loadPdf(file) {
   const ab = await file.arrayBuffer();
   const task = pdfjsLib.getDocument({ data: ab, useWorkerFetch: true });
   const pdfDoc = await task.promise;
+  applyWorkflowDefaults();
   state.pdfDoc = pdfDoc;
+  state.hasActiveDocument = true;
+  updateUploadLockUi();
   state.pages = [];
   state.currentPageIdx = 0;
   state.selectedCardId = null;
-  state.templates.front = null;
-  state.templates.back = null;
-  state.frontCalibration.anchors = { a: null, b: null, c: null };
-  state.frontCalibration.outliersByPage = new Map();
-  state.frontCalibration.showOutliersOnly = false;
+  state.exportRotation.front = 0;
+  state.exportRotation.back = 0;
   state.gridSlicer.active = false;
   state.gridSlicer.awaitingBounds = false;
   state.gridSlicer.showSlices = false;
@@ -243,12 +316,13 @@ async function loadPdf(file) {
       heightPts: vp.height,
       canvas: null,
       cards: [],
-      role: pageRoleByIndex(i - 1, pdfDoc.numPages),
+      role: pageRoleByIndex(i - 1, pdfDoc.numPages, state.workflowType),
     });
   }
 
   els.docMeta.textContent = `${file.name} • ${pdfDoc.numPages} pages`;
   els.workflowPanel.hidden = false;
+  if (els.orientationPanel) els.orientationPanel.hidden = false;
   els.exportPanel.hidden = false;
   hydratePageOptions();
   syncStats();
@@ -275,443 +349,6 @@ async function ensurePageCanvas(pageIdx) {
     pageModel.canvas = canvas;
     pageModel.pxPerPt = canvas.width / pageModel.widthPts;
   }
-}
-
-function aspectRange(mode) {
-  if (mode === "poker") return [0.66, 0.74];
-  if (mode === "tarot") return [0.54, 0.61];
-  if (mode === "mini") return [0.66, 0.74];
-  if (mode === "free") return [0.2, 1];
-  return [0.48, 0.9];
-}
-
-function iou(a, b) {
-  const x1 = Math.max(a.x, b.x);
-  const y1 = Math.max(a.y, b.y);
-  const x2 = Math.min(a.x + a.w, b.x + b.w);
-  const y2 = Math.min(a.y + a.h, b.y + b.h);
-  const w = Math.max(0, x2 - x1);
-  const h = Math.max(0, y2 - y1);
-  const inter = w * h;
-  const union = a.w * a.h + b.w * b.h - inter;
-  return union > 0 ? inter / union : 0;
-}
-
-function nmsRects(rects) {
-  const sorted = [...rects].sort((a, b) => b.w * b.h - a.w * a.h);
-  const out = [];
-  for (const r of sorted) {
-    if (out.some((q) => iou(q, r) > 0.65)) continue;
-    out.push(r);
-  }
-  return out.sort((a, b) => a.y - b.y || a.x - b.x);
-}
-
-function detectCardsCv(canvas, minAreaPct, mode) {
-  const src = cv.imread(canvas);
-  const gray = new cv.Mat();
-  const blur = new cv.Mat();
-  const bw = new cv.Mat();
-  const kernel = cv.getStructuringElement(cv.MORPH_RECT, new cv.Size(5, 5));
-  const morphed = new cv.Mat();
-  const contours = new cv.MatVector();
-  const hierarchy = new cv.Mat();
-
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
-  cv.adaptiveThreshold(
-    blur,
-    bw,
-    255,
-    cv.ADAPTIVE_THRESH_GAUSSIAN_C,
-    cv.THRESH_BINARY_INV,
-    35,
-    9,
-  );
-  cv.morphologyEx(bw, morphed, cv.MORPH_CLOSE, kernel);
-  cv.findContours(morphed, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-
-  const [minAspect, maxAspect] = aspectRange(mode);
-  const minArea = (minAreaPct / 100) * canvas.width * canvas.height;
-  const rects = [];
-
-  for (let i = 0; i < contours.size(); i += 1) {
-    const cnt = contours.get(i);
-    const area = cv.contourArea(cnt);
-    if (area < minArea) {
-      cnt.delete();
-      continue;
-    }
-
-    const rect = cv.minAreaRect(cnt);
-    const rw = Math.max(rect.size.width, rect.size.height);
-    const rh = Math.min(rect.size.width, rect.size.height);
-    if (rw < 25 || rh < 25) {
-      cnt.delete();
-      continue;
-    }
-
-    const ratio = rh / rw;
-    const bbox = cv.boundingRect(cnt);
-    const nearEdge =
-      bbox.x <= 3 ||
-      bbox.y <= 3 ||
-      bbox.x + bbox.width >= canvas.width - 3 ||
-      bbox.y + bbox.height >= canvas.height - 3;
-
-    if (!nearEdge && ratio >= minAspect && ratio <= maxAspect) {
-      rects.push({ x: bbox.x, y: bbox.y, w: bbox.width, h: bbox.height });
-    }
-
-    cnt.delete();
-  }
-
-  src.delete();
-  gray.delete();
-  blur.delete();
-  bw.delete();
-  morphed.delete();
-  kernel.delete();
-  contours.delete();
-  hierarchy.delete();
-
-  return nmsRects(rects);
-}
-
-function morphDilate(src, w, h) {
-  const out = new Uint8Array(src.length);
-  for (let y = 1; y < h - 1; y += 1) {
-    for (let x = 1; x < w - 1; x += 1) {
-      const i = y * w + x;
-      let on = 0;
-      for (let yy = -1; yy <= 1 && !on; yy += 1) {
-        for (let xx = -1; xx <= 1; xx += 1) {
-          if (src[i + yy * w + xx]) {
-            on = 1;
-            break;
-          }
-        }
-      }
-      out[i] = on;
-    }
-  }
-  return out;
-}
-
-function morphErode(src, w, h) {
-  const out = new Uint8Array(src.length);
-  for (let y = 1; y < h - 1; y += 1) {
-    for (let x = 1; x < w - 1; x += 1) {
-      const i = y * w + x;
-      let on = 1;
-      for (let yy = -1; yy <= 1 && on; yy += 1) {
-        for (let xx = -1; xx <= 1; xx += 1) {
-          if (!src[i + yy * w + xx]) {
-            on = 0;
-            break;
-          }
-        }
-      }
-      out[i] = on;
-    }
-  }
-  return out;
-}
-
-function detectCardsFallback(canvas, minAreaPct, mode) {
-  const maxDim = 1400;
-  const scale = Math.min(1, maxDim / Math.max(canvas.width, canvas.height));
-  const w = Math.max(40, Math.round(canvas.width * scale));
-  const h = Math.max(40, Math.round(canvas.height * scale));
-  const t = document.createElement("canvas");
-  t.width = w;
-  t.height = h;
-  const tctx = t.getContext("2d", { willReadFrequently: true });
-  tctx.drawImage(canvas, 0, 0, w, h);
-  const img = tctx.getImageData(0, 0, w, h);
-  const data = img.data;
-
-  let sum = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    sum += (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-  }
-  const mean = sum / (w * h);
-  const threshold = Math.min(248, Math.max(205, mean - 6));
-
-  const binary = new Uint8Array(w * h);
-  for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
-    const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-    binary[p] = lum < threshold ? 1 : 0;
-  }
-
-  const closed = morphErode(morphDilate(binary, w, h), w, h);
-  const visited = new Uint8Array(w * h);
-  const [minAspect, maxAspect] = aspectRange(mode);
-  const minArea = (minAreaPct / 100) * w * h;
-  const rects = [];
-  const q = new Int32Array(w * h);
-
-  for (let y = 1; y < h - 1; y += 1) {
-    for (let x = 1; x < w - 1; x += 1) {
-      const idx = y * w + x;
-      if (!closed[idx] || visited[idx]) continue;
-
-      let head = 0;
-      let tail = 0;
-      q[tail++] = idx;
-      visited[idx] = 1;
-      let count = 0;
-      let minX = x;
-      let minY = y;
-      let maxX = x;
-      let maxY = y;
-
-      while (head < tail) {
-        const cur = q[head++];
-        const cx = cur % w;
-        const cy = (cur - cx) / w;
-        count += 1;
-        if (cx < minX) minX = cx;
-        if (cy < minY) minY = cy;
-        if (cx > maxX) maxX = cx;
-        if (cy > maxY) maxY = cy;
-
-        const n1 = cur - 1;
-        const n2 = cur + 1;
-        const n3 = cur - w;
-        const n4 = cur + w;
-        if (!visited[n1] && closed[n1]) {
-          visited[n1] = 1;
-          q[tail++] = n1;
-        }
-        if (!visited[n2] && closed[n2]) {
-          visited[n2] = 1;
-          q[tail++] = n2;
-        }
-        if (!visited[n3] && closed[n3]) {
-          visited[n3] = 1;
-          q[tail++] = n3;
-        }
-        if (!visited[n4] && closed[n4]) {
-          visited[n4] = 1;
-          q[tail++] = n4;
-        }
-      }
-
-      const bw = maxX - minX + 1;
-      const bh = maxY - minY + 1;
-      const bboxArea = bw * bh;
-      const ratio = Math.min(bw, bh) / Math.max(bw, bh);
-      const fill = count / Math.max(1, bboxArea);
-      const nearEdge = minX < 2 || minY < 2 || maxX > w - 3 || maxY > h - 3;
-
-      if (
-        !nearEdge &&
-        bboxArea >= minArea &&
-        bw > 16 &&
-        bh > 16 &&
-        ratio >= minAspect &&
-        ratio <= maxAspect &&
-        fill > 0.08
-      ) {
-        const pad = 4;
-        rects.push({
-          x: Math.max(0, Math.round((minX - pad) / scale)),
-          y: Math.max(0, Math.round((minY - pad) / scale)),
-          w: Math.min(canvas.width, Math.round((bw + pad * 2) / scale)),
-          h: Math.min(canvas.height, Math.round((bh + pad * 2) / scale)),
-        });
-      }
-    }
-  }
-
-  return nmsRects(rects);
-}
-
-function buildDarkMask(canvas, maxDim = 1400) {
-  const scale = Math.min(1, maxDim / Math.max(canvas.width, canvas.height));
-  const w = Math.max(40, Math.round(canvas.width * scale));
-  const h = Math.max(40, Math.round(canvas.height * scale));
-  const t = document.createElement("canvas");
-  t.width = w;
-  t.height = h;
-  const tctx = t.getContext("2d", { willReadFrequently: true });
-  tctx.drawImage(canvas, 0, 0, w, h);
-  const { data } = tctx.getImageData(0, 0, w, h);
-
-  let sum = 0;
-  for (let i = 0; i < data.length; i += 4) {
-    sum += (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-  }
-  const mean = sum / (w * h);
-  const threshold = Math.min(248, Math.max(195, mean - 10));
-
-  const dark = new Uint8Array(w * h);
-  for (let i = 0, p = 0; i < data.length; i += 4, p += 1) {
-    const lum = (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
-    dark[p] = lum < threshold ? 1 : 0;
-  }
-  return { dark, w, h, scale };
-}
-
-function findContentBounds(dark, w, h) {
-  const colCounts = new Uint32Array(w);
-  const rowCounts = new Uint32Array(h);
-  for (let y = 0; y < h; y += 1) {
-    const o = y * w;
-    for (let x = 0; x < w; x += 1) {
-      const v = dark[o + x];
-      colCounts[x] += v;
-      rowCounts[y] += v;
-    }
-  }
-
-  const colMin = Math.max(2, Math.round(h * 0.01));
-  const rowMin = Math.max(2, Math.round(w * 0.01));
-  let minX = 0;
-  let maxX = w - 1;
-  let minY = 0;
-  let maxY = h - 1;
-  while (minX < maxX && colCounts[minX] < colMin) minX += 1;
-  while (maxX > minX && colCounts[maxX] < colMin) maxX -= 1;
-  while (minY < maxY && rowCounts[minY] < rowMin) minY += 1;
-  while (maxY > minY && rowCounts[maxY] < rowMin) maxY -= 1;
-
-  if (maxX - minX < Math.round(w * 0.3) || maxY - minY < Math.round(h * 0.3)) {
-    return { minX: 0, maxX: w - 1, minY: 0, maxY: h - 1, colCounts, rowCounts };
-  }
-  return { minX, maxX, minY, maxY, colCounts, rowCounts };
-}
-
-function findSplitCuts(profile, start, end, parts) {
-  const cuts = [start];
-  const span = end - start + 1;
-  for (let i = 1; i < parts; i += 1) {
-    const target = start + (span * i) / parts;
-    const window = Math.max(8, Math.round(span / (parts * 3)));
-    const s = Math.max(start + 2, Math.round(target - window));
-    const e = Math.min(end - 2, Math.round(target + window));
-    let best = Math.round(target);
-    let bestVal = Number.POSITIVE_INFINITY;
-    for (let x = s; x <= e; x += 1) {
-      const v = profile[x];
-      if (v < bestVal) {
-        bestVal = v;
-        best = x;
-      }
-    }
-    cuts.push(best);
-  }
-  cuts.push(end);
-  return cuts.sort((a, b) => a - b);
-}
-
-function median(values) {
-  if (!values.length) return 0;
-  const arr = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(arr.length / 2);
-  return arr.length % 2 === 0 ? (arr[mid - 1] + arr[mid]) / 2 : arr[mid];
-}
-
-function kmeans1d(values, k = 3, iterations = 16) {
-  if (values.length < k) return null;
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  if (Math.abs(max - min) < 1e-6) return null;
-
-  const centers = Array.from({ length: k }, (_, i) => min + ((i + 0.5) * (max - min)) / k);
-  const labels = new Array(values.length).fill(0);
-
-  for (let t = 0; t < iterations; t += 1) {
-    const sums = new Array(k).fill(0);
-    const counts = new Array(k).fill(0);
-    for (let i = 0; i < values.length; i += 1) {
-      let best = 0;
-      let bestDist = Number.POSITIVE_INFINITY;
-      for (let j = 0; j < k; j += 1) {
-        const d = Math.abs(values[i] - centers[j]);
-        if (d < bestDist) {
-          bestDist = d;
-          best = j;
-        }
-      }
-      labels[i] = best;
-      sums[best] += values[i];
-      counts[best] += 1;
-    }
-    for (let j = 0; j < k; j += 1) {
-      if (counts[j] > 0) centers[j] = sums[j] / counts[j];
-    }
-  }
-
-  const order = centers.map((c, i) => ({ c, i })).sort((a, b) => a.c - b.c);
-  const remap = new Array(k).fill(0);
-  order.forEach((v, idx) => {
-    remap[v.i] = idx;
-  });
-
-  const sortedCenters = order.map((o) => o.c);
-  const sortedLabels = labels.map((l) => remap[l]);
-  const sortedCounts = new Array(k).fill(0);
-  sortedLabels.forEach((l) => {
-    sortedCounts[l] += 1;
-  });
-
-  return { centers: sortedCenters, labels: sortedLabels, counts: sortedCounts };
-}
-
-function buildGuideProfiles(dark, w, h) {
-  const colEdge = new Float32Array(w);
-  const rowEdge = new Float32Array(h);
-  for (let y = 1; y < h; y += 1) {
-    const o = y * w;
-    const p = (y - 1) * w;
-    for (let x = 0; x < w; x += 1) {
-      rowEdge[y] += Math.abs(dark[o + x] - dark[p + x]);
-    }
-  }
-  for (let y = 0; y < h; y += 1) {
-    const o = y * w;
-    for (let x = 1; x < w; x += 1) {
-      colEdge[x] += Math.abs(dark[o + x] - dark[o + x - 1]);
-    }
-  }
-  return { colEdge, rowEdge };
-}
-
-function snapBoundary(pos, profile, lo, hi, radius = 10) {
-  const start = Math.max(lo, Math.round(pos - radius));
-  const end = Math.min(hi, Math.round(pos + radius));
-  let best = Math.round(pos);
-  let bestScore = -1;
-  for (let i = start; i <= end; i += 1) {
-    const score = profile[i] ?? 0;
-    if (score > bestScore) {
-      bestScore = score;
-      best = i;
-    }
-  }
-  return best;
-}
-
-function getSelectedCard() {
-  const page = getPage();
-  if (!page) return null;
-  return page.cards.find((c) => c.id === state.selectedCardId) ?? null;
-}
-
-function updateTemplateReadout() {
-  if (!els.templateReadout) return;
-  const fmt = (t) => (t ? Math.round(t.w) + "x" + Math.round(t.h) + " px" : "unset");
-  els.templateReadout.textContent = "Templates: Front " + fmt(state.templates.front) + " | Back " + fmt(state.templates.back);
-}
-
-function updateCalibrationReadout() {
-  if (!els.calibrationReadout) return;
-  const a = state.frontCalibration.anchors;
-  const setFlags = [a.a ? "A" : "-", a.b ? "B" : "-", a.c ? "C" : "-"].join("");
-  const mode = state.frontCalibration.showOutliersOnly ? "Outliers view ON" : "Outliers view OFF";
-  els.calibrationReadout.textContent = "Front calibration anchors: " + setFlags + " | " + mode;
 }
 
 function updateGridReadout() {
@@ -770,6 +407,173 @@ function createGridLinesWithinBounds(bounds, inputs) {
   return { xLines, yLines };
 }
 
+function buildImageData(canvas) {
+  const tmp = document.createElement("canvas");
+  tmp.width = canvas.width;
+  tmp.height = canvas.height;
+  const tctx = tmp.getContext("2d", { willReadFrequently: true });
+  tctx.drawImage(canvas, 0, 0);
+  return tctx.getImageData(0, 0, tmp.width, tmp.height);
+}
+
+function pixelLuma(data, width, x, y) {
+  const xx = Math.max(0, Math.min(width - 1, x));
+  const i = (y * width + xx) * 4;
+  return (data[i] * 299 + data[i + 1] * 587 + data[i + 2] * 114) / 1000;
+}
+
+function detectVerticalGutterBand(img, dividerX, top, bottom, halfWidth) {
+  const w = img.width;
+  const h = img.height;
+  const data = img.data;
+  const y0 = Math.max(0, Math.floor(top));
+  const y1 = Math.min(h - 1, Math.ceil(bottom));
+  const search = Math.max(4, Math.round(halfWidth * 2));
+  const cx = Math.round(dividerX);
+  const xStart = Math.max(1, cx - search);
+  const xEnd = Math.min(w - 2, cx + search);
+  const scores = [];
+  let bestX = cx;
+  let best = Number.POSITIVE_INFINITY;
+  for (let x = xStart; x <= xEnd; x += 1) {
+    let dark = 0;
+    for (let y = y0; y <= y1; y += 2) {
+      if (pixelLuma(data, w, x, y) < 220) dark += 1;
+    }
+    scores.push({ x, dark });
+    if (dark < best) {
+      best = dark;
+      bestX = x;
+    }
+  }
+  const tol = Math.max(3, Math.round(((y1 - y0 + 1) / 2) * 0.08));
+  let left = bestX;
+  let right = bestX;
+  while (left > xStart) {
+    const s = scores[left - xStart - 1];
+    if (!s || s.dark > best + tol || bestX - left >= halfWidth) break;
+    left -= 1;
+  }
+  while (right < xEnd) {
+    const s = scores[right - xStart + 1];
+    if (!s || s.dark > best + tol || right - bestX >= halfWidth) break;
+    right += 1;
+  }
+  const minHalf = Math.max(2, Math.round(halfWidth * 0.35));
+  if (bestX - left < minHalf) left = Math.max(xStart, bestX - minHalf);
+  if (right - bestX < minHalf) right = Math.min(xEnd, bestX + minHalf);
+  return { start: left, end: right };
+}
+
+function detectHorizontalGutterBand(img, dividerY, left, right, halfHeight) {
+  const w = img.width;
+  const h = img.height;
+  const data = img.data;
+  const x0 = Math.max(0, Math.floor(left));
+  const x1 = Math.min(w - 1, Math.ceil(right));
+  const search = Math.max(4, Math.round(halfHeight * 2));
+  const cy = Math.round(dividerY);
+  const yStart = Math.max(1, cy - search);
+  const yEnd = Math.min(h - 2, cy + search);
+  const scores = [];
+  let bestY = cy;
+  let best = Number.POSITIVE_INFINITY;
+  for (let y = yStart; y <= yEnd; y += 1) {
+    let dark = 0;
+    for (let x = x0; x <= x1; x += 2) {
+      if (pixelLuma(data, w, x, y) < 220) dark += 1;
+    }
+    scores.push({ y, dark });
+    if (dark < best) {
+      best = dark;
+      bestY = y;
+    }
+  }
+  const tol = Math.max(3, Math.round(((x1 - x0 + 1) / 2) * 0.08));
+  let top = bestY;
+  let bottom = bestY;
+  while (top > yStart) {
+    const s = scores[top - yStart - 1];
+    if (!s || s.dark > best + tol || bestY - top >= halfHeight) break;
+    top -= 1;
+  }
+  while (bottom < yEnd) {
+    const s = scores[bottom - yStart + 1];
+    if (!s || s.dark > best + tol || bottom - bestY >= halfHeight) break;
+    bottom += 1;
+  }
+  const minHalf = Math.max(2, Math.round(halfHeight * 0.35));
+  if (bestY - top < minHalf) top = Math.max(yStart, bestY - minHalf);
+  if (bottom - bestY < minHalf) bottom = Math.min(yEnd, bestY + minHalf);
+  return { start: top, end: bottom };
+}
+
+function applyGutterfoldAutoBands(page, bounds, lines) {
+  if (!isGutterfoldMode()) {
+    return {
+      xLines: lines.xLines,
+      yLines: lines.yLines,
+      cellTypes: Array.from({ length: Math.max(1, lines.yLines.length - 1) }, () =>
+        Array.from({ length: Math.max(1, lines.xLines.length - 1) }, () => "card"),
+      ),
+    };
+  }
+  const img = buildImageData(page.canvas);
+  const cols = Math.max(1, lines.xLines.length - 1);
+  const rows = Math.max(1, lines.yLines.length - 1);
+  const cellW = bounds.w / cols;
+  const cellH = bounds.h / rows;
+  const xHalf = Math.max(3, Math.round(cellW * 0.06));
+  const yHalf = Math.max(3, Math.round(cellH * 0.06));
+
+  const xBands = [];
+  for (let i = 1; i < lines.xLines.length - 1; i += 1) {
+    xBands.push(detectVerticalGutterBand(img, lines.xLines[i], bounds.y, bounds.y + bounds.h, xHalf));
+  }
+  const yBands = [];
+  for (let i = 1; i < lines.yLines.length - 1; i += 1) {
+    yBands.push(detectHorizontalGutterBand(img, lines.yLines[i], bounds.x, bounds.x + bounds.w, yHalf));
+  }
+
+  const xLines = [lines.xLines[0]];
+  for (let i = 0; i < xBands.length; i += 1) {
+    const band = xBands[i];
+    const prev = xLines[xLines.length - 1];
+    xLines.push(Math.max(prev + 2, band.start));
+    xLines.push(Math.max(prev + 4, band.end));
+  }
+  xLines.push(lines.xLines[lines.xLines.length - 1]);
+
+  const yLines = [lines.yLines[0]];
+  for (let i = 0; i < yBands.length; i += 1) {
+    const band = yBands[i];
+    const prev = yLines[yLines.length - 1];
+    yLines.push(Math.max(prev + 2, band.start));
+    yLines.push(Math.max(prev + 4, band.end));
+  }
+  yLines.push(lines.yLines[lines.yLines.length - 1]);
+
+  const xBandTypes = [];
+  for (let i = 0; i < xLines.length - 1; i += 1) {
+    const center = (xLines[i] + xLines[i + 1]) / 2;
+    const isGutter = xBands.some((b) => center >= b.start && center <= b.end);
+    xBandTypes.push(isGutter ? "gutter" : "card");
+  }
+  const yBandTypes = [];
+  for (let i = 0; i < yLines.length - 1; i += 1) {
+    const center = (yLines[i] + yLines[i + 1]) / 2;
+    const isGutter = yBands.some((b) => center >= b.start && center <= b.end);
+    yBandTypes.push(isGutter ? "gutter" : "card");
+  }
+
+  const cellTypes = Array.from({ length: yBandTypes.length }, (_, r) =>
+    Array.from({ length: xBandTypes.length }, (_, c) =>
+      xBandTypes[c] === "gutter" || yBandTypes[r] === "gutter" ? "gutter" : "card",
+    ),
+  );
+  return { xLines, yLines, cellTypes };
+}
+
 function beginGridBoundsDraw() {
   clearAllCards();
   state.gridSlicer.active = false;
@@ -807,6 +611,7 @@ function initGridFromBounds(bounds) {
     setEngineStatus("Grid rows and columns must both be at least 1");
     return false;
   }
+  const configured = applyGutterfoldAutoBands(page, bounds, lines);
 
   state.gridSlicer.active = true;
   state.gridSlicer.awaitingBounds = false;
@@ -818,15 +623,13 @@ function initGridFromBounds(bounds) {
     w: bounds.w / W,
     h: bounds.h / H,
   };
-  state.gridSlicer.xLines = lines.xLines;
-  state.gridSlicer.yLines = lines.yLines;
+  state.gridSlicer.xLines = configured.xLines;
+  state.gridSlicer.yLines = configured.yLines;
   state.gridSlicer.activeLine = null;
   state.gridSlicer.bandHits = { cols: [], rows: [] };
-  const cols = Math.max(1, lines.xLines.length - 1);
-  const rows = Math.max(1, lines.yLines.length - 1);
-  state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => "card"));
-  state.gridSlicer.xNorm = lines.xLines.map((v) => v / W);
-  state.gridSlicer.yNorm = lines.yLines.map((v) => v / H);
+  state.gridSlicer.cellTypes = configured.cellTypes;
+  state.gridSlicer.xNorm = configured.xLines.map((v) => v / W);
+  state.gridSlicer.yNorm = configured.yLines.map((v) => v / H);
 
   clearAllCards();
   updateGridReadout();
@@ -863,13 +666,12 @@ function rebuildGridStructureFromControls() {
     return false;
   }
   const refPage = state.pages[state.gridSlicer.refPageIdx];
-  state.gridSlicer.xLines = lines.xLines;
-  state.gridSlicer.yLines = lines.yLines;
-  state.gridSlicer.xNorm = lines.xLines.map((v) => v / refPage.canvas.width);
-  state.gridSlicer.yNorm = lines.yLines.map((v) => v / refPage.canvas.height);
-  const cols = Math.max(1, lines.xLines.length - 1);
-  const rows = Math.max(1, lines.yLines.length - 1);
-  state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => "card"));
+  const configured = applyGutterfoldAutoBands(refPage, bounds, lines);
+  state.gridSlicer.xLines = configured.xLines;
+  state.gridSlicer.yLines = configured.yLines;
+  state.gridSlicer.xNorm = configured.xLines.map((v) => v / refPage.canvas.width);
+  state.gridSlicer.yNorm = configured.yLines.map((v) => v / refPage.canvas.height);
+  state.gridSlicer.cellTypes = configured.cellTypes;
   state.gridSlicer.activeLine = null;
   return true;
 }
@@ -949,8 +751,9 @@ function insertGridLineAtPoint(mx, my) {
 
   const cols = Math.max(1, lines.x.length - 1);
   const rows = Math.max(1, lines.y.length - 1);
+  const seed = "card";
   if (!Array.isArray(state.gridSlicer.cellTypes) || state.gridSlicer.cellTypes.length !== rows || (state.gridSlicer.cellTypes[0]||[]).length !== cols) {
-    state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => "card"));
+    state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => seed));
   }
 
   let minDx = Number.POSITIVE_INFINITY;
@@ -969,7 +772,7 @@ function insertGridLineAtPoint(mx, my) {
     if (idx < 0) return false;
     x.splice(idx + 1, 0, px);
     for (let r = 0; r < state.gridSlicer.cellTypes.length; r += 1) {
-      const base = state.gridSlicer.cellTypes[r][idx] || "card";
+      const base = state.gridSlicer.cellTypes[r][idx] || seed;
       state.gridSlicer.cellTypes[r].splice(idx, 1, base, base);
     }
     state.gridSlicer.xLines = x;
@@ -983,7 +786,7 @@ function insertGridLineAtPoint(mx, my) {
     }
     if (idx < 0) return false;
     y.splice(idx + 1, 0, py);
-    const source = state.gridSlicer.cellTypes[idx] ? [...state.gridSlicer.cellTypes[idx]] : Array.from({ length: Math.max(1, lines.x.length - 1) }, () => "card");
+    const source = state.gridSlicer.cellTypes[idx] ? [...state.gridSlicer.cellTypes[idx]] : Array.from({ length: Math.max(1, lines.x.length - 1) }, () => seed);
     state.gridSlicer.cellTypes.splice(idx, 1, source, [...source]);
     state.gridSlicer.yLines = y;
     state.gridSlicer.yNorm = y.map((v) => v / page.canvas.height);
@@ -1010,6 +813,26 @@ function clampAndSortLines(lines, maxV) {
   return out;
 }
 
+function resolveGutterfoldColumnRoles(cellTypes, cols) {
+  const cardCols = [];
+  for (let c = 0; c < cols; c += 1) {
+    let cardHits = 0;
+    for (let r = 0; r < cellTypes.length; r += 1) {
+      if ((cellTypes[r]?.[c] || "card") === "card") cardHits += 1;
+    }
+    if (cardHits > 0) cardCols.push(c);
+  }
+  if (!cardCols.length) return new Map();
+  const frontCol = state.gutterfoldFrontColumn === "right"
+    ? cardCols[cardCols.length - 1]
+    : cardCols[0];
+  const out = new Map();
+  for (const c of cardCols) {
+    out.set(c, c === frontCol ? "front" : "back");
+  }
+  return out;
+}
+
 function applyGridToPage(pageIdx, xLines, yLines, updateNorm = true) {
   const page = state.pages[pageIdx];
   if (!page?.canvas) return 0;
@@ -1018,21 +841,28 @@ function applyGridToPage(pageIdx, xLines, yLines, updateNorm = true) {
   const y = clampAndSortLines(yLines, page.canvas.height - 1);
   const cols = Math.max(1, x.length - 1);
   const rows = Math.max(1, y.length - 1);
+  const seed = "card";
   if (!Array.isArray(state.gridSlicer.cellTypes) || state.gridSlicer.cellTypes.length !== rows || (state.gridSlicer.cellTypes[0]||[]).length !== cols) {
-    state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => "card"));
+    state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => seed));
   }
+  const gutterfoldRoles = isGutterfoldMode()
+    ? resolveGutterfoldColumnRoles(state.gridSlicer.cellTypes, cols)
+    : null;
   const cards = [];
 
   for (let r = 0; r < rows; r += 1) {
     for (let c = 0; c < cols; c += 1) {
-      if ((state.gridSlicer.cellTypes[r]?.[c] || "card") === "gutter") continue;
+      if ((state.gridSlicer.cellTypes[r]?.[c] || seed) !== "card") continue;
       const rect = {
         x: x[c],
         y: y[r],
         w: Math.max(8, x[c + 1] - x[c]),
         h: Math.max(8, y[r + 1] - y[r]),
       };
-      cards.push(makeCard(rect, page.role === "back" ? "back" : "front", "grid"));
+      const label = isGutterfoldMode()
+        ? (gutterfoldRoles.get(c) || "front")
+        : (page.role === "back" ? "back" : "front");
+      cards.push(makeCard(rect, label, "grid"));
     }
   }
 
@@ -1086,8 +916,9 @@ function drawGridOverlay(page) {
       const yLines = lines.y;
       const cols = Math.max(1, xLines.length - 1);
       const rows = Math.max(1, yLines.length - 1);
+      const seed = "card";
       if (!Array.isArray(state.gridSlicer.cellTypes) || state.gridSlicer.cellTypes.length !== rows || (state.gridSlicer.cellTypes[0]||[]).length !== cols) {
-        state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => "card"));
+        state.gridSlicer.cellTypes = Array.from({ length: rows }, () => Array.from({ length: cols }, () => seed));
       }
       const left = xLines[0] * s;
       const right = xLines[xLines.length - 1] * s;
@@ -1106,11 +937,23 @@ function drawGridOverlay(page) {
           const x2 = xLines[c + 1] * s;
           const y1 = yLines[r] * s;
           const y2 = yLines[r + 1] * s;
-          const type = state.gridSlicer.cellTypes[r]?.[c] || "card";
-          ctx.fillStyle = type === "gutter" ? "rgba(255,138,76,0.22)" : "rgba(35,150,215,0.10)";
-          ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+          const type = state.gridSlicer.cellTypes[r]?.[c] || seed;
+          if (type === "card" || type === "gutter") {
+            if (isGutterfoldMode() && type !== "gutter") continue;
+            ctx.fillStyle = type === "gutter" ? "rgba(255,138,76,0.24)" : "rgba(35,150,215,0.14)";
+            ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
+            ctx.fillStyle = type === "gutter" ? "rgba(228,97,43,0.95)" : "rgba(24,120,184,0.96)";
+            ctx.font = "700 12px Space Grotesk";
+            ctx.textAlign = "center";
+            ctx.textBaseline = "middle";
+            if (!isGutterfoldMode() || type === "gutter") {
+              ctx.fillText(type.toUpperCase(), (x1 + x2) / 2, (y1 + y2) / 2);
+            }
+          }
         }
       }
+      ctx.textAlign = "start";
+      ctx.textBaseline = "alphabetic";
 
 
       ctx.strokeStyle = "rgba(35, 150, 215, 0.9)";
@@ -1258,646 +1101,8 @@ function hitTestGridLine(mx, my) {
   return best;
 }
 
-function getGridDimensions(n) {
-  if (n <= 1) return { cols: 1, rows: 1 };
-  let best = { cols: n, rows: 1, cost: Number.POSITIVE_INFINITY };
-  for (let cols = 1; cols <= n; cols += 1) {
-    const rows = Math.ceil(n / cols);
-    const waste = rows * cols - n;
-    const shape = Math.abs(cols - rows);
-    const cost = waste * 10 + shape;
-    if (cost < best.cost) best = { cols, rows, cost };
-  }
-  return { cols: best.cols, rows: best.rows };
-}
-
-function assignCardsToTargets(cards, targets) {
-  const centers = cards.map((c) => ({ cx: c.x + c.w / 2, cy: c.y + c.h / 2 }));
-  const pairs = [];
-  for (let i = 0; i < cards.length; i += 1) {
-    for (let j = 0; j < targets.length; j += 1) {
-      const dx = centers[i].cx - targets[j].cx;
-      const dy = centers[i].cy - targets[j].cy;
-      pairs.push({ i, j, d: dx * dx + dy * dy });
-    }
-  }
-  pairs.sort((a, b) => a.d - b.d);
-
-  const out = new Array(cards.length).fill(null);
-  const usedCards = new Set();
-  const usedTargets = new Set();
-  for (const p of pairs) {
-    if (usedCards.has(p.i) || usedTargets.has(p.j)) continue;
-    usedCards.add(p.i);
-    usedTargets.add(p.j);
-    out[p.i] = targets[p.j];
-    if (usedCards.size === cards.length) break;
-  }
-  return out;
-}
-
-function setFrontAnchor(slot) {
-  const selected = getSelectedCard();
-  if (!selected) {
-    setEngineStatus("Select a front card for anchor " + slot.toUpperCase());
-    return;
-  }
-  if (selected.label !== "front") {
-    setEngineStatus("Anchor must be a front card");
-    return;
-  }
-  const pageIdx = state.currentPageIdx;
-  state.frontCalibration.anchors[slot] = {
-    pageIdx,
-    cx: selected.x + selected.w / 2,
-    cy: selected.y + selected.h / 2,
-    w: selected.w,
-    h: selected.h,
-  };
-  updateCalibrationReadout();
-  setEngineStatus("Front anchor " + slot.toUpperCase() + " saved", true);
-}
-
-function calibrateFrontGrid() {
-  const { a, b, c } = state.frontCalibration.anchors;
-  if (!a || !b || !c) {
-    setEngineStatus("Set anchors A, B, and C first");
-    return { updated: 0, outliers: 0 };
-  }
-
-  let colStep = b.cx - a.cx;
-  let rowStep = c.cy - a.cy;
-  if (Math.abs(colStep) < 8 || Math.abs(rowStep) < 8) {
-    setEngineStatus("Anchors are too close; reset and try again");
-    return { updated: 0, outliers: 0 };
-  }
-  if (colStep < 0) colStep *= -1;
-  if (rowStep < 0) rowStep *= -1;
-
-  const fw = Math.round((a.w + b.w + c.w) / 3);
-  const fh = Math.round((a.h + b.h + c.h) / 3);
-  state.templates.front = { w: fw, h: fh };
-
-  const outliersByPage = new Map();
-  let updated = 0;
-  let outlierCount = 0;
-
-  for (let p = 0; p < state.pages.length; p += 1) {
-    const page = state.pages[p];
-    const fronts = page.cards.filter((card) => card.label === "front");
-    if (!fronts.length) continue;
-
-    const { cols, rows } = getGridDimensions(fronts.length);
-    const centers = fronts.map((card) => ({ cx: card.x + card.w / 2, cy: card.y + card.h / 2 }));
-    const minCx = Math.min(...centers.map((c0) => c0.cx));
-    const minCy = Math.min(...centers.map((c0) => c0.cy));
-
-    const targets = [];
-    for (let r = 0; r < rows; r += 1) {
-      for (let cl = 0; cl < cols; cl += 1) {
-        targets.push({ cx: minCx + cl * colStep, cy: minCy + r * rowStep });
-      }
-    }
-
-    const assignments = assignCardsToTargets(fronts, targets);
-    const outlierIds = new Set();
-
-    for (let i = 0; i < fronts.length; i += 1) {
-      const card = fronts[i];
-      const t = assignments[i] ?? { cx: centers[i].cx, cy: centers[i].cy };
-      const expectedX = t.cx - fw / 2;
-      const expectedY = t.cy - fh / 2;
-      const dx = Math.abs(card.x - expectedX);
-      const dy = Math.abs(card.y - expectedY);
-      const ds = Math.abs(card.w - fw) + Math.abs(card.h - fh);
-
-      card.x = expectedX;
-      card.y = expectedY;
-      card.w = fw;
-      card.h = fh;
-      normalizeCard(card);
-      clampCard(card, page);
-      updated += 1;
-
-      if (dx > fw * 0.22 || dy > fh * 0.22 || ds > fw * 0.2) {
-        outlierIds.add(card.id);
-        outlierCount += 1;
-      }
-    }
-
-    if (outlierIds.size) {
-      outliersByPage.set(page.number, outlierIds);
-    }
-  }
-
-  state.frontCalibration.outliersByPage = outliersByPage;
-  updateTemplateReadout();
-  return { updated, outliers: outlierCount };
-}
-
-function buildPageGuideModel(page) {
-  if (page.guideModel) return page.guideModel;
-  const { dark, w, h, scale } = buildDarkMask(page.canvas, 1500);
-  const bounds = findContentBounds(dark, w, h);
-  const { colEdge, rowEdge } = buildGuideProfiles(dark, w, h);
-  page.guideModel = { scale, bounds, colEdge, rowEdge };
-  return page.guideModel;
-}
-
-function bestFixedEdgeStart(profile, minBound, maxBound, targetStart, fixedLen, radius = 24) {
-  const lo = Math.max(minBound, Math.round(targetStart - radius));
-  const hi = Math.min(maxBound - fixedLen, Math.round(targetStart + radius));
-  if (hi < lo) return Math.max(minBound, Math.min(Math.round(targetStart), maxBound - fixedLen));
-
-  let best = Math.round(targetStart);
-  let bestScore = Number.NEGATIVE_INFINITY;
-  for (let start = lo; start <= hi; start += 1) {
-    const end = start + fixedLen;
-    const score = (profile[start] ?? 0) + (profile[end] ?? 0);
-    if (score > bestScore) {
-      bestScore = score;
-      best = start;
-    }
-  }
-  return best;
-}
-
-function nearestIndex(values, target) {
-  let idx = 0;
-  let best = Number.POSITIVE_INFINITY;
-  for (let i = 0; i < values.length; i += 1) {
-    const d = Math.abs(values[i] - target);
-    if (d < best) {
-      best = d;
-      idx = i;
-    }
-  }
-  return idx;
-}
-
-function snapCardToTemplate(page, card, template, targetCenter = null) {
-  if (!template || !page?.canvas) return false;
-  const { scale, bounds, colEdge, rowEdge } = buildPageGuideModel(page);
-
-  const cx = targetCenter?.cx ?? card.x + card.w / 2;
-  const cy = targetCenter?.cy ?? card.y + card.h / 2;
-  const tw = Math.max(8, template.w);
-  const th = Math.max(8, template.h);
-
-  const targetX0 = (cx - tw / 2) * scale;
-  const targetY0 = (cy - th / 2) * scale;
-  const twScaled = Math.max(8, Math.round(tw * scale));
-  const thScaled = Math.max(8, Math.round(th * scale));
-
-  const sx = bestFixedEdgeStart(colEdge, bounds.minX, bounds.maxX, targetX0, twScaled, 28);
-  const sy = bestFixedEdgeStart(rowEdge, bounds.minY, bounds.maxY, targetY0, thScaled, 28);
-
-  card.x = sx / scale;
-  card.y = sy / scale;
-  card.w = tw;
-  card.h = th;
-  normalizeCard(card);
-  clampCard(card, page);
-  return true;
-}
-
-function applyTemplateToCardsOnPage(page, cards, template) {
-  if (!template || !cards.length) return 0;
-  const centers = cards.map((c) => ({ cx: c.x + c.w / 2, cy: c.y + c.h / 2 }));
-
-  let targets = null;
-  if (cards.length >= 6 && cards.length <= 12) {
-    const cols = 3;
-    const rows = Math.max(2, Math.ceil(cards.length / cols));
-    const kx = kmeans1d(centers.map((c) => c.cx), cols);
-    const ky = kmeans1d(centers.map((c) => c.cy), rows);
-    if (kx && ky) {
-      const anchors = [];
-      for (let r = 0; r < ky.centers.length; r += 1) {
-        for (let c = 0; c < kx.centers.length; c += 1) {
-          anchors.push({ cx: kx.centers[c], cy: ky.centers[r] });
-        }
-      }
-
-      const assignments = [];
-      for (let i = 0; i < centers.length; i += 1) {
-        for (let j = 0; j < anchors.length; j += 1) {
-          const dx = centers[i].cx - anchors[j].cx;
-          const dy = centers[i].cy - anchors[j].cy;
-          assignments.push({ i, j, d: dx * dx + dy * dy });
-        }
-      }
-      assignments.sort((a, b) => a.d - b.d);
-
-      targets = new Array(cards.length).fill(null);
-      const usedCards = new Set();
-      const usedAnchors = new Set();
-      for (const a of assignments) {
-        if (usedCards.has(a.i) || usedAnchors.has(a.j)) continue;
-        usedCards.add(a.i);
-        usedAnchors.add(a.j);
-        targets[a.i] = anchors[a.j];
-        if (usedCards.size === cards.length) break;
-      }
-    }
-  }
-
-  let updated = 0;
-  for (let i = 0; i < cards.length; i += 1) {
-    if (snapCardToTemplate(page, cards[i], template, targets ? targets[i] : null)) {
-      updated += 1;
-    }
-  }
-  return updated;
-}
-
-async function applyTemplatesAcrossDocument() {
-  let updated = 0;
-  for (let i = 0; i < state.pages.length; i += 1) {
-    const page = state.pages[i];
-    await ensurePageCanvas(i);
-    page.guideModel = null;
-
-    const byPageRole = page.role === "front" ? state.templates.front : page.role === "back" ? state.templates.back : null;
-    if (byPageRole) {
-      updated += applyTemplateToCardsOnPage(page, page.cards, byPageRole);
-      continue;
-    }
-
-    if (state.templates.front) {
-      const fronts = page.cards.filter((c) => c.label === "front");
-      updated += applyTemplateToCardsOnPage(page, fronts, state.templates.front);
-    }
-    if (state.templates.back) {
-      const backs = page.cards.filter((c) => c.label === "back");
-      updated += applyTemplateToCardsOnPage(page, backs, state.templates.back);
-    }
-  }
-  return updated;
-}
-
-async function runTemplateApply(trigger = "manual") {
-  if (!state.templates.front && !state.templates.back) {
-    setEngineStatus("Set a front or back template first");
-    return;
-  }
-
-  setBusy(true, "Applying templates...");
-  try {
-    const updated = await applyTemplatesAcrossDocument();
-    syncStats();
-    drawCurrentPage();
-    const suffix = trigger === "auto" ? " (auto)" : "";
-    setEngineStatus("Template apply complete (" + updated + " cards adjusted)" + suffix, updated > 0);
-  } catch (err) {
-    console.error(err);
-    setEngineStatus("Template apply failed: " + err.message);
-  } finally {
-    setBusy(false);
-  }
-}
-
-function setTemplateFromSelected(kind) {
-  const selected = getSelectedCard();
-  if (!selected) {
-    setEngineStatus("Select a " + kind + " card first");
-    return;
-  }
-  state.templates[kind] = { w: selected.w, h: selected.h };
-  updateTemplateReadout();
-  const bothReady = !!(state.templates.front && state.templates.back);
-  setEngineStatus(
-    (kind === "front" ? "Front" : "Back") + " template saved" + (bothReady ? ". Auto-applying templates..." : ""),
-    true,
-  );
-  if (bothReady) {
-    runTemplateApply("auto");
-  }
-}
-function regularizeNineGridRects(rects, canvas, mode) {
-  if (rects.length < 8 || rects.length > 10) return rects;
-  const centers = rects.map((r) => ({
-    cx: r.x + r.w / 2,
-    cy: r.y + r.h / 2,
-  }));
-
-  const xs = centers.map((c) => c.cx).sort((a, b) => a - b);
-  const ys = centers.map((c) => c.cy).sort((a, b) => a - b);
-  const n = centers.length;
-  const group = (i) => Math.min(2, Math.floor((i * 3) / n));
-
-  const xGroups = [[], [], []];
-  const yGroups = [[], [], []];
-  xs.forEach((x, i) => xGroups[group(i)].push(x));
-  ys.forEach((y, i) => yGroups[group(i)].push(y));
-  const colCenters = xGroups.map((g) => median(g)).sort((a, b) => a - b);
-  const rowCenters = yGroups.map((g) => median(g)).sort((a, b) => a - b);
-
-  const xStepA = colCenters[1] - colCenters[0];
-  const xStepB = colCenters[2] - colCenters[1];
-  const yStepA = rowCenters[1] - rowCenters[0];
-  const yStepB = rowCenters[2] - rowCenters[1];
-  if (xStepA <= 5 || xStepB <= 5 || yStepA <= 5 || yStepB <= 5) return rects;
-
-  const { dark, w, h, scale } = buildDarkMask(canvas, 1500);
-  const bounds = findContentBounds(dark, w, h);
-  const minX = Math.max(0, Math.round(bounds.minX / scale));
-  const maxX = Math.min(canvas.width - 1, Math.round(bounds.maxX / scale));
-  const minY = Math.max(0, Math.round(bounds.minY / scale));
-  const maxY = Math.min(canvas.height - 1, Math.round(bounds.maxY / scale));
-
-  const vx = [
-    colCenters[0] - xStepA / 2,
-    (colCenters[0] + colCenters[1]) / 2,
-    (colCenters[1] + colCenters[2]) / 2,
-    colCenters[2] + xStepB / 2,
-  ];
-  const vy = [
-    rowCenters[0] - yStepA / 2,
-    (rowCenters[0] + rowCenters[1]) / 2,
-    (rowCenters[1] + rowCenters[2]) / 2,
-    rowCenters[2] + yStepB / 2,
-  ];
-
-  vx[0] = Math.max(vx[0], minX);
-  vx[3] = Math.min(vx[3], maxX);
-  vy[0] = Math.max(vy[0], minY);
-  vy[3] = Math.min(vy[3], maxY);
-
-  const out = [];
-  const [minAspect, maxAspect] = aspectRange(mode);
-  const relaxedMin = minAspect * 0.78;
-  const relaxedMax = maxAspect * 1.28;
-
-  for (let r = 0; r < 3; r += 1) {
-    for (let c = 0; c < 3; c += 1) {
-      const x0 = vx[c];
-      const x1 = vx[c + 1];
-      const y0 = vy[r];
-      const y1 = vy[r + 1];
-      const cw = Math.max(10, x1 - x0);
-      const ch = Math.max(10, y1 - y0);
-      const expandX = Math.max(2, Math.round(cw * 0.015));
-      const expandY = Math.max(2, Math.round(ch * 0.015));
-      const rx = Math.max(0, Math.round(x0 - expandX));
-      const ry = Math.max(0, Math.round(y0 - expandY));
-      const rw = Math.min(canvas.width - rx, Math.round(cw + expandX * 2));
-      const rh = Math.min(canvas.height - ry, Math.round(ch + expandY * 2));
-      const ratio = Math.min(rw, rh) / Math.max(rw, rh);
-      if (rw > 8 && rh > 8 && ratio >= relaxedMin && ratio <= relaxedMax) {
-        out.push({ x: rx, y: ry, w: rw, h: rh });
-      }
-    }
-  }
-
-  if (out.length !== 9) return rects;
-  return nmsRects(out);
-}
-
-function inferUniformNineFromAnchors(rects, canvas, minAreaPct, mode) {
-  if (rects.length < 8 || rects.length > 14) return rects;
-  const pageArea = canvas.width * canvas.height;
-  const areas = rects.map((r) => r.w * r.h).sort((a, b) => a - b);
-  const medArea = median(areas);
-  if (!medArea) return rects;
-
-  const candidates = rects.filter((r) => {
-    const area = r.w * r.h;
-    return area < pageArea * 0.45 && area >= medArea * 0.35 && area <= medArea * 2.3;
-  });
-  if (candidates.length < 6) return rects;
-
-  const xs = candidates.map((r) => r.x + r.w / 2);
-  const ys = candidates.map((r) => r.y + r.h / 2);
-  const kx = kmeans1d(xs, 3);
-  const ky = kmeans1d(ys, 3);
-  if (!kx || !ky) return rects;
-  if (Math.min(...kx.counts) < 1 || Math.min(...ky.counts) < 1) return rects;
-
-  const colCenters = kx.centers;
-  const rowCenters = ky.centers;
-  const stepX = Math.min(colCenters[1] - colCenters[0], colCenters[2] - colCenters[1]);
-  const stepY = Math.min(rowCenters[1] - rowCenters[0], rowCenters[2] - rowCenters[1]);
-  if (stepX <= 12 || stepY <= 12) return rects;
-
-  let width = median(candidates.map((r) => r.w));
-  let height = median(candidates.map((r) => r.h));
-  if (width > height) [width, height] = [height, width];
-
-  const baseRatio = Math.min(width, height) / Math.max(width, height);
-  const [minAspect, maxAspect] = aspectRange(mode);
-  const targetRatio = Math.max(minAspect * 0.9, Math.min(baseRatio, maxAspect * 1.1));
-  height = width / Math.max(0.01, targetRatio);
-  width = Math.max(width, stepX * 0.88);
-  height = Math.max(height, stepY * 0.88);
-  width = Math.min(width, stepX * 0.99);
-  height = Math.min(height, stepY * 0.99);
-
-  const { dark, w, h, scale } = buildDarkMask(canvas, 1500);
-  const bounds = findContentBounds(dark, w, h);
-  const minX = Math.max(0, Math.round(bounds.minX / scale));
-  const maxX = Math.min(canvas.width - 1, Math.round(bounds.maxX / scale));
-  const minY = Math.max(0, Math.round(bounds.minY / scale));
-  const maxY = Math.min(canvas.height - 1, Math.round(bounds.maxY / scale));
-  const { colEdge, rowEdge } = buildGuideProfiles(dark, w, h);
-
-  const gridMinX = colCenters[0] - width / 2;
-  const gridMaxX = colCenters[2] + width / 2;
-  const gridMinY = rowCenters[0] - height / 2;
-  const gridMaxY = rowCenters[2] + height / 2;
-  const shiftX = gridMinX < minX ? minX - gridMinX : gridMaxX > maxX ? maxX - gridMaxX : 0;
-  const shiftY = gridMinY < minY ? minY - gridMinY : gridMaxY > maxY ? maxY - gridMaxY : 0;
-
-  const out = [];
-  for (let r = 0; r < 3; r += 1) {
-    for (let c = 0; c < 3; c += 1) {
-      const cx = colCenters[c] + shiftX;
-      const cy = rowCenters[r] + shiftY;
-      let x0 = cx - width / 2;
-      let x1 = cx + width / 2;
-      let y0 = cy - height / 2;
-      let y1 = cy + height / 2;
-
-      const sx0 = snapBoundary(x0 * scale, colEdge, bounds.minX, bounds.maxX, 16) / scale;
-      const sx1 = snapBoundary(x1 * scale, colEdge, bounds.minX, bounds.maxX, 16) / scale;
-      const sy0 = snapBoundary(y0 * scale, rowEdge, bounds.minY, bounds.maxY, 16) / scale;
-      const sy1 = snapBoundary(y1 * scale, rowEdge, bounds.minY, bounds.maxY, 16) / scale;
-      if (Math.abs(sx1 - sx0) > 12 && Math.abs(sy1 - sy0) > 12) {
-        x0 = sx0;
-        x1 = sx1;
-        y0 = sy0;
-        y1 = sy1;
-      }
-
-      const rx = Math.max(0, Math.round(Math.min(x0, x1)));
-      const ry = Math.max(0, Math.round(Math.min(y0, y1)));
-      const rw = Math.max(8, Math.round(Math.abs(x1 - x0)));
-      const rh = Math.max(8, Math.round(Math.abs(y1 - y0)));
-      const clampedW = Math.min(rw, canvas.width - rx);
-      const clampedH = Math.min(rh, canvas.height - ry);
-      out.push({ x: rx, y: ry, w: clampedW, h: clampedH });
-    }
-  }
-
-  const minArea = (minAreaPct / 100) * canvas.width * canvas.height;
-  const valid = out.filter((r) => r.w * r.h >= minArea);
-  if (valid.length !== 9) return rects;
-  return nmsRects(valid);
-}
-
-function detectGrid3x3Rects(canvas, minAreaPct, mode, opts = {}) {
-  const force = !!opts.force;
-  const { dark, w, h, scale } = buildDarkMask(canvas, 1500);
-  const { minX, maxX, minY, maxY, colCounts, rowCounts } = findContentBounds(dark, w, h);
-  const xCuts = findSplitCuts(colCounts, minX, maxX, 3);
-  const yCuts = findSplitCuts(rowCounts, minY, maxY, 3);
-
-  const [minAspect, maxAspect] = aspectRange(mode);
-  const relaxedMin = minAspect * 0.7;
-  const relaxedMax = maxAspect * 1.35;
-  const minArea = (minAreaPct / 100) * canvas.width * canvas.height;
-  const rects = [];
-
-  for (let r = 0; r < 3; r += 1) {
-    for (let c = 0; c < 3; c += 1) {
-      const x0 = xCuts[c];
-      const x1 = xCuts[c + 1];
-      const y0 = yCuts[r];
-      const y1 = yCuts[r + 1];
-      const cw = Math.max(1, x1 - x0);
-      const ch = Math.max(1, y1 - y0);
-      const padX = force ? Math.max(0, Math.round(cw * 0.0)) : Math.max(1, Math.round(cw * 0.01));
-      const padY = force ? Math.max(0, Math.round(ch * 0.0)) : Math.max(1, Math.round(ch * 0.01));
-      const sx = x0 - padX;
-      const sy = y0 - padY;
-      const sw = Math.max(12, cw + padX * 2);
-      const sh = Math.max(12, ch + padY * 2);
-
-      const ratio = Math.min(sw, sh) / Math.max(sw, sh);
-      const rx = Math.max(0, Math.round(sx / scale));
-      const ry = Math.max(0, Math.round(sy / scale));
-      const rw = Math.min(canvas.width - rx, Math.round(sw / scale));
-      const rh = Math.min(canvas.height - ry, Math.round(sh / scale));
-      const area = rw * rh;
-
-      if (force || (area >= minArea && ratio >= relaxedMin && ratio <= relaxedMax)) {
-        rects.push({ x: rx, y: ry, w: rw, h: rh });
-      }
-    }
-  }
-
-  if (force && rects.length !== 9) {
-    const full = [];
-    for (let r = 0; r < 3; r += 1) {
-      for (let c = 0; c < 3; c += 1) {
-        const x0 = minX + ((maxX - minX) * c) / 3;
-        const x1 = minX + ((maxX - minX) * (c + 1)) / 3;
-        const y0 = minY + ((maxY - minY) * r) / 3;
-        const y1 = minY + ((maxY - minY) * (r + 1)) / 3;
-        const rx = Math.max(0, Math.round(x0 / scale));
-        const ry = Math.max(0, Math.round(y0 / scale));
-        const rw = Math.max(8, Math.round((x1 - x0) / scale));
-        const rh = Math.max(8, Math.round((y1 - y0) / scale));
-        full.push({ x: rx, y: ry, w: Math.min(rw, canvas.width - rx), h: Math.min(rh, canvas.height - ry) });
-      }
-    }
-    return nmsRects(full);
-  }
-
-  return nmsRects(rects);
-}
-
-function isPageSizedDetection(rects, canvas) {
-  if (!rects.length) return true;
-  const pageArea = canvas.width * canvas.height;
-  const largest = rects.reduce((a, b) => (a.w * a.h > b.w * b.h ? a : b));
-  const largestPct = (largest.w * largest.h) / pageArea;
-  return rects.length <= 2 && largestPct >= 0.6;
-}
-
-function shouldTryGridRecovery(rects, canvas) {
-  if (!rects.length) return true;
-  if (rects.length >= 9) return false;
-  return isPageSizedDetection(rects, canvas);
-}
-
-async function detectPage(pageIdx) {
-  const page = state.pages[pageIdx];
-  await ensurePageCanvas(pageIdx);
-  const minArea = Number(els.minAreaInput.value || 1);
-  const mode = els.aspectModeSelect.value;
-
-  let rects = [];
-  if (state.cvReady) {
-    rects = detectCardsCv(page.canvas, minArea, mode);
-  }
-  if (!rects.length) {
-    rects = detectCardsFallback(page.canvas, minArea, mode);
-  }
-  if (shouldTryGridRecovery(rects, page.canvas)) {
-    const gridRects = detectGrid3x3Rects(page.canvas, minArea, mode);
-    if (gridRects.length >= 8) {
-      rects = gridRects;
-    }
-  }
-  rects = regularizeNineGridRects(rects, page.canvas, mode);
-  rects = inferUniformNineFromAnchors(rects, page.canvas, minArea, mode);
-
-  if (isPageSizedDetection(rects, page.canvas) || rects.length < 8) {
-    const forced = detectGrid3x3Rects(page.canvas, Math.min(minArea, 0.2), mode, { force: true });
-    if (forced.length >= 8) {
-      rects = regularizeNineGridRects(forced, page.canvas, mode);
-      rects = inferUniformNineFromAnchors(rects, page.canvas, Math.min(minArea, 0.2), mode);
-    }
-  }
-
-  page.cards = rects.map((r) => makeCard(r, page.role, "auto"));
-  state.selectedCardId = page.cards[0]?.id ?? null;
-}
-
 function getPage() {
   return state.pages[state.currentPageIdx];
-}
-
-function drawCard(card, selected = false) {
-  const s = state.canvasScale;
-  const x = card.x * s;
-  const y = card.y * s;
-  const w = card.w * s;
-  const h = card.h * s;
-
-  ctx.save();
-  ctx.lineWidth = selected ? 3 : 2;
-  const stroke = card.label === "back" ? "#2f6d6b" : "#db4f27";
-  ctx.strokeStyle = stroke;
-  ctx.fillStyle = selected ? "rgba(255, 255, 255, 0.28)" : "transparent";
-  ctx.strokeRect(x, y, w, h);
-  if (selected) ctx.fillRect(x, y, w, h);
-
-  ctx.fillStyle = stroke;
-  ctx.font = "600 12px Space Grotesk";
-  ctx.fillText(`${card.label.toUpperCase()} ${card.rotation ? `(${card.rotation}°)` : ""}`.trim(), x + 4, y + 14);
-
-  if (selected) {
-    const hs = Math.max(8, Math.round(getHitRadii(state.lastPointerType).drawHandle));
-    const handles = [
-      [x, y],
-      [x + w, y],
-      [x + w, y + h],
-      [x, y + h],
-      [x + w / 2, y],
-      [x + w, y + h / 2],
-      [x + w / 2, y + h],
-      [x, y + h / 2],
-    ];
-    ctx.fillStyle = "#fff";
-    handles.forEach(([hx, hy]) => {
-      ctx.fillRect(hx - hs, hy - hs, hs * 2, hs * 2);
-      ctx.strokeRect(hx - hs, hy - hs, hs * 2, hs * 2);
-    });
-  }
-
-  ctx.restore();
 }
 
 function drawCurrentPage() {
@@ -1909,9 +1114,10 @@ function drawCurrentPage() {
   const padX = wrapStyles
     ? (parseFloat(wrapStyles.paddingLeft || "0") + parseFloat(wrapStyles.paddingRight || "0"))
     : 24;
-  const availableW = wrap ? Math.max(260, wrap.clientWidth - padX) : 1200;
-  const availableH = Math.max(320, window.innerHeight * 0.68);
-  const fit = Math.min(availableW / page.canvas.width, availableH / page.canvas.height, 1);
+  const wrapW = wrap ? Math.max(260, wrap.clientWidth - padX) : window.innerWidth - 36;
+  const viewportW = Math.max(320, window.innerWidth - 36);
+  const availableW = Math.min(wrapW, viewportW);
+  const fit = Math.max(0.1, availableW / page.canvas.width);
   state.canvasScale = fit;
 
   els.pageCanvas.width = Math.max(1, Math.round(page.canvas.width * fit));
@@ -1925,13 +1131,13 @@ function drawCurrentPage() {
   if (state.gridSlicer.awaitingBounds && state.gridSlicer.refPageIdx === state.currentPageIdx) {
     els.selectionReadout.textContent = "Step 2: Draw one box around the full card layout area.";
   } else if (state.gridSlicer.active && state.gridSlicer.refPageIdx === state.currentPageIdx) {
-    els.selectionReadout.textContent = "Step 3: Drag divider lines, then click spacing regions you want excluded.";
+    els.selectionReadout.textContent = isGutterfoldMode()
+      ? "Step 3: Drag divider lines, then click any missed gutter band to mark it as GUTTER."
+      : "Step 3: Drag divider lines, then click spacing regions you want excluded.";
   } else {
     els.selectionReadout.textContent = "Step 4: Apply the grid to all pages, then build ZIP.";
   }
 
-  updateTemplateReadout();
-  updateCalibrationReadout();
   updateGridReadout();
 }
 
@@ -1950,6 +1156,10 @@ function syncStats() {
   els.statCards.textContent = String(cards);
   els.statFronts.textContent = String(fronts);
   els.statBacks.textContent = String(backs);
+  if (els.orientationPanel) {
+    els.orientationPanel.hidden = state.pages.length === 0;
+  }
+  updateOrientationUi();
   updateActionStates();
 }
 
@@ -1978,144 +1188,6 @@ function getHitRadii(pointerType = "mouse") {
     nearPad: Math.max(24, (touchLike ? 50 : 34) * unit),
     drawHandle: Math.max(6, (touchLike ? 10 : 7) * unit),
   };
-}
-
-function nearestResizeHandle(mx, my, x, y, w, h, edgeBand) {
-  const cornerBand = edgeBand * 1.25;
-  const nearLeft = Math.abs(mx - x) <= edgeBand;
-  const nearRight = Math.abs(mx - (x + w)) <= edgeBand;
-  const nearTop = Math.abs(my - y) <= edgeBand;
-  const nearBottom = Math.abs(my - (y + h)) <= edgeBand;
-
-  if (Math.abs(mx - x) <= cornerBand && Math.abs(my - y) <= cornerBand) return "tl";
-  if (Math.abs(mx - (x + w)) <= cornerBand && Math.abs(my - y) <= cornerBand) return "tr";
-  if (Math.abs(mx - (x + w)) <= cornerBand && Math.abs(my - (y + h)) <= cornerBand) return "br";
-  if (Math.abs(mx - x) <= cornerBand && Math.abs(my - (y + h)) <= cornerBand) return "bl";
-
-  if (nearTop) return "tm";
-  if (nearRight) return "rm";
-  if (nearBottom) return "bm";
-  if (nearLeft) return "lm";
-  return null;
-}
-
-function hitTestCard(mx, my, pointerType = state.lastPointerType) {
-  const page = getPage();
-  const s = state.canvasScale;
-  const hit = getHitRadii(pointerType);
-  const cornerRadius = hit.corner;
-  const edgeRadius = hit.edge;
-  const pickRadius = hit.pick;
-  const cards = [...page.cards].reverse();
-
-  const checkCard = (card, prioritizeResize = false) => {
-    const x = card.x * s;
-    const y = card.y * s;
-    const w = card.w * s;
-    const h = card.h * s;
-    const handles = [
-      { type: "tl", x, y },
-      { type: "tr", x: x + w, y },
-      { type: "br", x: x + w, y: y + h },
-      { type: "bl", x, y: y + h },
-      { type: "tm", x: x + w / 2, y },
-      { type: "rm", x: x + w, y: y + h / 2 },
-      { type: "bm", x: x + w / 2, y: y + h },
-      { type: "lm", x, y: y + h / 2 },
-    ];
-
-    const handle = handles.find((hnd) => {
-      const radius = hnd.type.endsWith("m") ? edgeRadius : cornerRadius;
-      const dx = mx - hnd.x;
-      const dy = my - hnd.y;
-      return dx * dx + dy * dy <= radius * radius;
-    });
-    if (handle) {
-      return { card, handle: handle.type };
-    }
-
-    const inPick = mx >= x - pickRadius && mx <= x + w + pickRadius && my >= y - pickRadius && my <= y + h + pickRadius;
-    if (!inPick) return null;
-
-    if (prioritizeResize) {
-      const near = nearestResizeHandle(mx, my, x, y, w, h, edgeRadius);
-      if (near) return { card, handle: near };
-    }
-
-    return { card, handle: "move" };
-  };
-
-  if (state.selectedCardId) {
-    const selected = page.cards.find((c) => c.id === state.selectedCardId);
-    if (selected) {
-      const selHit = checkCard(selected, true);
-      if (selHit) return selHit;
-    }
-  }
-
-  for (const card of cards) {
-    const otherHit = checkCard(card, false);
-    if (otherHit) return otherHit;
-  }
-  return null;
-}
-
-function isNearSelected(mx, my, pointerType = state.lastPointerType) {
-  const page = getPage();
-  const selected = page.cards.find((c) => c.id === state.selectedCardId);
-  if (!selected) return false;
-  const s = state.canvasScale;
-  const x = selected.x * s;
-  const y = selected.y * s;
-  const w = selected.w * s;
-  const h = selected.h * s;
-  const pad = getHitRadii(pointerType).nearPad;
-  return mx >= x - pad && mx <= x + w + pad && my >= y - pad && my <= y + h + pad;
-}
-function cursorForHandle(handle) {
-  if (handle === "tl" || handle === "br") return "nwse-resize";
-  if (handle === "tr" || handle === "bl") return "nesw-resize";
-  if (handle === "tm" || handle === "bm") return "ns-resize";
-  if (handle === "lm" || handle === "rm") return "ew-resize";
-  if (handle === "move") return "move";
-  return "default";
-}
-
-function normalizeCard(card) {
-  if (card.w < 0) {
-    card.x += card.w;
-    card.w *= -1;
-  }
-  if (card.h < 0) {
-    card.y += card.h;
-    card.h *= -1;
-  }
-  card.w = Math.max(8, card.w);
-  card.h = Math.max(8, card.h);
-}
-
-function clampCard(card, page) {
-  card.x = Math.max(0, Math.min(card.x, page.canvas.width - 4));
-  card.y = Math.max(0, Math.min(card.y, page.canvas.height - 4));
-  card.w = Math.min(card.w, page.canvas.width - card.x);
-  card.h = Math.min(card.h, page.canvas.height - card.y);
-}
-
-function toggleSelectedLabel() {
-  const page = getPage();
-  const card = page.cards.find((c) => c.id === state.selectedCardId);
-  if (!card) return;
-  card.label = card.label === "front" ? "back" : "front";
-  syncStats();
-  drawCurrentPage();
-}
-
-function rotateSelected(delta) {
-  const page = getPage();
-  const card = page.cards.find((c) => c.id === state.selectedCardId);
-  if (!card) return;
-  card.rotation = ((card.rotation + delta) % 360 + 360) % 360;
-  drawCurrentPage();
 }
 
 function applyPageRole(role) {
@@ -2195,6 +1267,26 @@ function resizeOutput(canvas, preset) {
   return out;
 }
 
+function rotateCanvasByDegrees(canvas, degrees) {
+  const norm = ((degrees % 360) + 360) % 360;
+  if (!norm) return canvas;
+  const turns = Math.round(norm / 90) % 4;
+  if (!turns) return canvas;
+  const out = document.createElement("canvas");
+  if (turns % 2) {
+    out.width = canvas.height;
+    out.height = canvas.width;
+  } else {
+    out.width = canvas.width;
+    out.height = canvas.height;
+  }
+  const octx = out.getContext("2d");
+  octx.translate(out.width / 2, out.height / 2);
+  octx.rotate((turns * Math.PI) / 2);
+  octx.drawImage(canvas, -canvas.width / 2, -canvas.height / 2);
+  return out;
+}
+
 function canvasToPngBlob(canvas) {
   return new Promise((resolve, reject) => {
     canvas.toBlob(
@@ -2208,110 +1300,56 @@ function canvasToPngBlob(canvas) {
   });
 }
 
-function autoClassifyLikelyBacks() {
-  const fingerprints = new Map();
+function getSampleCardByLabel(label) {
   for (const page of state.pages) {
     for (const card of page.cards) {
-      const crop = cropCardToCanvas(page.canvas, card, 0);
-      const h = simpleHashCanvas(crop);
-      const arr = fingerprints.get(h) ?? [];
-      arr.push(card);
-      fingerprints.set(h, arr);
+      if (card.label === label) return { page, card };
     }
   }
-
-  let largest = [];
-  for (const cluster of fingerprints.values()) {
-    if (cluster.length > largest.length) largest = cluster;
-  }
-
-  const total = state.pages.reduce((a, p) => a + p.cards.length, 0);
-  if (largest.length >= Math.max(2, Math.round(total * 0.12))) {
-    for (const card of largest) card.label = "back";
-    for (const page of state.pages) {
-      for (const card of page.cards) {
-        if (!largest.includes(card) && card.label !== "back") card.label = "front";
-      }
-    }
-  }
+  return null;
 }
 
-function hammingDistanceBits(a, b) {
-  if (!a || !b || a.length !== b.length) return Number.POSITIVE_INFINITY;
-  let d = 0;
-  for (let i = 0; i < a.length; i += 1) {
-    if (a[i] !== b[i]) d += 1;
+function renderPreviewCanvas(targetCanvas, sample, label) {
+  if (!targetCanvas) return;
+  const pctx = targetCanvas.getContext("2d");
+  pctx.clearRect(0, 0, targetCanvas.width, targetCanvas.height);
+  pctx.fillStyle = "#f4efe6";
+  pctx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
+  if (!sample) {
+    pctx.fillStyle = "#6a5b4e";
+    pctx.font = "600 13px Space Grotesk";
+    pctx.textAlign = "center";
+    pctx.textBaseline = "middle";
+    pctx.fillText("No " + label + " sample yet", targetCanvas.width / 2, targetCanvas.height / 2);
+    return;
   }
-  return d;
+  let crop = cropCardToCanvas(sample.page.canvas, sample.card, 0);
+  crop = rotateCanvasByDegrees(crop, state.exportRotation[label]);
+  const pad = 8;
+  const fit = Math.min(
+    (targetCanvas.width - pad * 2) / Math.max(1, crop.width),
+    (targetCanvas.height - pad * 2) / Math.max(1, crop.height),
+  );
+  const dw = Math.max(1, Math.round(crop.width * fit));
+  const dh = Math.max(1, Math.round(crop.height * fit));
+  const dx = Math.round((targetCanvas.width - dw) / 2);
+  const dy = Math.round((targetCanvas.height - dh) / 2);
+  pctx.drawImage(crop, dx, dy, dw, dh);
 }
 
-function estimateIdenticalBacks() {
-  const backs = [];
-  for (const page of state.pages) {
-    for (const card of page.cards) {
-      if (card.label !== "back") continue;
-      const crop = cropCardToCanvas(page.canvas, card, 0);
-      backs.push(simpleHashCanvas(crop));
-    }
+function updateOrientationUi() {
+  if (els.frontRotateBtn) {
+    els.frontRotateBtn.textContent = "Rotate Front 90° (" + state.exportRotation.front + "°)";
   }
-
-  if (backs.length < 2) return false;
-  let matches = 0;
-  let pairs = 0;
-  for (let i = 0; i < backs.length; i += 1) {
-    for (let j = i + 1; j < backs.length; j += 1) {
-      pairs += 1;
-      if (hammingDistanceBits(backs[i], backs[j]) <= 12) {
-        matches += 1;
-      }
-    }
+  if (els.backRotateBtn) {
+    els.backRotateBtn.textContent = "Rotate Back 90° (" + state.exportRotation.back + "°)";
   }
-
-  if (!pairs) return false;
-  return matches / pairs >= 0.7;
-}
-
-async function autodetectAll() {
-  if (!state.cvReady && window.cv && typeof window.cv.imread === "function") {
-    state.cvReady = true;
-  }
-
-  setBusy(true, "Detecting cards…");
-  try {
-    let total = 0;
-    for (let i = 0; i < state.pages.length; i += 1) {
-      setEngineStatus(`Detecting page ${i + 1}/${state.pages.length}`);
-      await detectPage(i);
-      total += state.pages[i].cards.length;
-    }
-    autoClassifyLikelyBacks();
-    const likelySameBacks = estimateIdenticalBacks();
-    if (els.singleBackToggle) {
-      els.singleBackToggle.checked = likelySameBacks;
-    }
-    els.pageRoleSelect.value = getPage().role;
-    syncStats();
-    drawCurrentPage();
-    setEngineStatus(
-      total > 0
-        ? `Detection complete (${total} boxes). Optional: draw a grid area on the preview and apply the grid to all pages for consistent slicing.${likelySameBacks ? " Backs look identical; single-back export is preselected." : ""}`
-        : "No cards detected (try grid setup or lower Min card area)",
-      total > 0,
-    );
-  } catch (err) {
-    console.error(err);
-    setEngineStatus(`Detection failed: ${err.message}`);
-  } finally {
-    setBusy(false);
-  }
+  renderPreviewCanvas(els.frontPreviewCanvas, getSampleCardByLabel("front"), "front");
+  renderPreviewCanvas(els.backPreviewCanvas, getSampleCardByLabel("back"), "back");
 }
 
 function scoreBackCandidate(page, card) {
   let score = card.w * card.h;
-  if (state.templates.back) {
-    score -= Math.abs(card.w - state.templates.back.w) * 40;
-    score -= Math.abs(card.h - state.templates.back.h) * 40;
-  }
   if (page.role === "back") score += 1500;
   return score;
 }
@@ -2325,7 +1363,7 @@ async function exportZip() {
   const frontsFolder = zip.folder("fronts");
   const backsFolder = zip.folder("backs");
 
-  const bleedIn = Number(els.bleedSelect?.value || 0);
+  const bleedIn = 0;
   const preset = els.sizePresetSelect.value;
   const singleBackOnly = !!els.singleBackToggle?.checked;
 
@@ -2351,6 +1389,8 @@ async function exportZip() {
         }
       } else {
         let crop = cropCardToCanvas(page.canvas, card, bleedPx);
+        const globalRot = card.label === "back" ? state.exportRotation.back : state.exportRotation.front;
+        crop = rotateCanvasByDegrees(crop, globalRot);
         crop = resizeOutput(crop, preset);
         const blob = await canvasToPngBlob(crop);
 
@@ -2375,10 +1415,8 @@ async function exportZip() {
   }
 
   if (singleBackOnly && bestBack) {
-    if (state.templates.back) {
-      snapCardToTemplate(bestBack.page, bestBack.card, state.templates.back);
-    }
     let crop = cropCardToCanvas(bestBack.page.canvas, bestBack.card, bestBack.bleedPx);
+    crop = rotateCanvasByDegrees(crop, state.exportRotation.back);
     crop = resizeOutput(crop, preset);
     const blob = await canvasToPngBlob(crop);
     backsFolder.file("001_back.png", blob);
@@ -2403,9 +1441,20 @@ async function exportZip() {
   setBusy(false);
 }
 function bindEvents() {
-  els.pdfInput.addEventListener("change", async (ev) => {
+  if (els.themeToggleBtn) {
+    els.themeToggleBtn.addEventListener("click", () => {
+      const cur = document.body.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      applyTheme(cur === "dark" ? "light" : "dark");
+    });
+  }
+  const onPdfSelected = (workflowType) => async (ev) => {
+    if (state.hasActiveDocument) {
+      setEngineStatus("A PDF is already loaded for this session. Refresh to start a new file.");
+      return;
+    }
     const file = ev.target.files?.[0];
     if (!file) return;
+    setWorkflowType(workflowType);
     setBusy(true, "Loading PDF...");
     try {
       await loadPdf(file);
@@ -2416,17 +1465,53 @@ function bindEvents() {
     } finally {
       setBusy(false);
     }
-  });
+  };
+  els.pdfInputDuplex.addEventListener("change", onPdfSelected("duplex"));
+  els.pdfInputGutterfold.addEventListener("change", onPdfSelected("gutterfold"));
 
   els.pageSelect.addEventListener("change", async () => {
     state.currentPageIdx = Number(els.pageSelect.value);
     state.selectedCardId = null;
-    els.pageRoleSelect.value = getPage().role;
+    if (!isGutterfoldMode()) {
+      els.pageRoleSelect.value = getPage().role;
+    }
     await ensurePageCanvas(state.currentPageIdx);
     drawCurrentPage();
   });
 
-  els.pageRoleSelect.addEventListener("change", () => applyPageRole(els.pageRoleSelect.value));
+  els.pageRoleSelect.addEventListener("change", () => {
+    if (isGutterfoldMode()) return;
+    applyPageRole(els.pageRoleSelect.value);
+  });
+  if (els.frontRotateBtn) {
+    els.frontRotateBtn.addEventListener("click", () => {
+      state.exportRotation.front = (state.exportRotation.front + 90) % 360;
+      updateOrientationUi();
+    });
+  }
+  if (els.backRotateBtn) {
+    els.backRotateBtn.addEventListener("click", () => {
+      state.exportRotation.back = (state.exportRotation.back + 90) % 360;
+      updateOrientationUi();
+    });
+  }
+  if (els.gutterfoldFrontColumnSelect) {
+    els.gutterfoldFrontColumnSelect.addEventListener("change", async () => {
+      state.gutterfoldFrontColumn = els.gutterfoldFrontColumnSelect.value === "right" ? "right" : "left";
+      if (!isGutterfoldMode()) return;
+      if (state.gridSlicer.showSlices) {
+        setBusy(true, "Updating front/back mapping...");
+        try {
+          await applyGridToAllPages();
+          syncStats();
+          drawCurrentPage();
+          setEngineStatus("Front/back columns updated", true);
+        } finally {
+          setBusy(false);
+        }
+      }
+    });
+  }
   if (els.resetGridBtn) {
     els.resetGridBtn.addEventListener("click", () => {
       beginGridBoundsDraw();
@@ -2465,59 +1550,6 @@ function bindEvents() {
     el.addEventListener("input", () => refreshGridPreview({ rebuildStructure: true }));
     el.addEventListener("change", () => refreshGridPreview({ rebuildStructure: true }));
   });
-
-
-  if (els.autodetectBtn) {
-    els.autodetectBtn.addEventListener("click", autodetectAll);
-  }
-  if (els.resetPageBtn) {
-    els.resetPageBtn.addEventListener("click", async () => {
-      const i = state.currentPageIdx;
-      await detectPage(i);
-      syncStats();
-      drawCurrentPage();
-    });
-  }
-
-  if (els.setFrontTemplateBtn) {
-    els.setFrontTemplateBtn.addEventListener("click", () => setTemplateFromSelected("front"));
-  }
-  if (els.setBackTemplateBtn) {
-    els.setBackTemplateBtn.addEventListener("click", () => setTemplateFromSelected("back"));
-  }
-  if (els.applyTemplatesBtn) {
-    els.applyTemplatesBtn.addEventListener("click", () => {
-      runTemplateApply("manual");
-    });
-  }
-  if (els.setAnchorABtn) {
-    els.setAnchorABtn.addEventListener("click", () => setFrontAnchor("a"));
-  }
-  if (els.setAnchorBBtn) {
-    els.setAnchorBBtn.addEventListener("click", () => setFrontAnchor("b"));
-  }
-  if (els.setAnchorCBtn) {
-    els.setAnchorCBtn.addEventListener("click", () => setFrontAnchor("c"));
-  }
-  if (els.calibrateFrontGridBtn) {
-    els.calibrateFrontGridBtn.addEventListener("click", () => {
-      const result = calibrateFrontGrid();
-      syncStats();
-      drawCurrentPage();
-      setEngineStatus(
-        "Front grid calibrated (" + result.updated + " cards adjusted, " + result.outliers + " outliers)",
-        result.updated > 0,
-      );
-    });
-  }
-  if (els.toggleOutliersBtn) {
-    els.toggleOutliersBtn.addEventListener("click", () => {
-      state.frontCalibration.showOutliersOnly = !state.frontCalibration.showOutliersOnly;
-      els.toggleOutliersBtn.textContent = state.frontCalibration.showOutliersOnly ? "Show All Cards" : "Show Front Outliers";
-      drawCurrentPage();
-    });
-  }
-
   if (els.exportBtn) {
     els.exportBtn.addEventListener("click", exportZip);
   }
@@ -2573,9 +1605,10 @@ function bindEvents() {
 
     const bandHit = hitTestBandToggle(x, y);
     if (bandHit && state.gridSlicer.refPageIdx === state.currentPageIdx) {
-      const current = state.gridSlicer.cellTypes?.[bandHit.row]?.[bandHit.col] || "card";
-      const mode = current === "gutter" ? "card" : "gutter";
-      state.gridSlicer.cellTypes[bandHit.row][bandHit.col] = mode;
+      if (!state.gridSlicer.cellTypes?.[bandHit.row]) return;
+      const currentType = state.gridSlicer.cellTypes?.[bandHit.row]?.[bandHit.col] || "card";
+      const nextType = isGutterfoldMode() ? "gutter" : (currentType === "gutter" ? "card" : "gutter");
+      state.gridSlicer.cellTypes[bandHit.row][bandHit.col] = nextType;
       if (state.gridSlicer.showSlices) {
         const lines = denormalizeGridForPage(state.currentPageIdx);
         if (lines) applyGridToPage(state.currentPageIdx, lines.x, lines.y, false);
@@ -2697,22 +1730,18 @@ function bindEvents() {
     }
     els.pageCanvas.style.cursor = "default";
   });
+
 }
 async function init() {
   try {
+    applyTheme(resolveInitialTheme());
     setEngineStatus("Loading engines…");
+    setWorkflowType("duplex");
+    updateUploadLockUi();
     bindEvents();
-    updateTemplateReadout();
-    updateCalibrationReadout();
     updateGridReadout();
     updateActionStates();
-
-    state.cvReady = await waitForOpenCv();
-    if (state.cvReady) {
-      setEngineStatus("Ready", true);
-    } else {
-      setEngineStatus("OpenCV unavailable (manual mode)");
-    }
+    setEngineStatus("Ready", true);
   } catch (err) {
     console.error(err);
     setEngineStatus("Init failed: " + (err?.message || String(err)));

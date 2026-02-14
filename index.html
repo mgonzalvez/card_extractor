@@ -17,6 +17,7 @@
     <main class="app-shell">
       <header class="hero">
         <div class="hero-nav">
+          <button id="theme-toggle-btn" class="btn ghost nav-link" type="button" aria-label="Toggle dark mode">Dark Mode</button>
           <a class="btn ghost nav-link" href="https://formatter.gonzhome.us" target="_blank" rel="noopener noreferrer">Formatter</a>
           <a class="btn ghost nav-link" href="http://pnpfinder.com" target="_blank" rel="noopener noreferrer">PnPFinder</a>
         </div>
@@ -32,11 +33,18 @@
           <h2>1. Upload PDF</h2>
           <span class="status-pill" id="engine-status">Loading engines…</span>
         </div>
-        <label class="file-drop" for="pdf-input">
-          <input id="pdf-input" type="file" accept="application/pdf" />
-          <strong>Drop a PDF or click to browse</strong>
-          <span>Supports vector and scanned pages. No files leave your device.</span>
-        </label>
+        <div class="upload-grid" role="group" aria-label="Choose one upload format for this session">
+          <label class="file-drop upload-choice" for="pdf-input-duplex">
+            <input id="pdf-input-duplex" type="file" accept="application/pdf" />
+            <strong>Traditional Grid Duplex PDF</strong>
+            <span>Use for front/back grid sheets on separate pages. Starts with 3x3 defaults.</span>
+          </label>
+          <label class="file-drop upload-choice" for="pdf-input-gutterfold">
+            <input id="pdf-input-gutterfold" type="file" accept="application/pdf" />
+            <strong>Gutterfold PDF</strong>
+            <span>Use for foldable layouts. Starts with 4x2 defaults and gutter auto-detection.</span>
+          </label>
+        </div>
         <div class="hint-row" id="doc-meta"></div>
       </section>
 
@@ -57,9 +65,8 @@
             <li>Click <strong>Apply Grid to All Pages</strong>, then build and download the ZIP.</li>
           </ol>
         </div>
-        <p class="workflow-tip">
+        <p class="workflow-tip" id="workflow-tip">
           Tip: if you change rows/columns after drawing the area, click <strong>Start Over Grid</strong> and redraw so the new structure is applied.
-          v1 currently supports traditional duplex grid PDFs only (fronts and backs on separate pages), not gutterfold layouts.
         </p>
 
         <div class="controls-grid">
@@ -68,7 +75,7 @@
             <select id="page-select"></select>
           </label>
 
-          <label>
+          <label id="page-role-field">
             Page role
             <select id="page-role-select">
               <option value="front">Fronts</option>
@@ -76,8 +83,16 @@
                           </select>
           </label>
 
+          <label id="gutterfold-front-column-field" hidden>
+            Front column
+            <select id="gutterfold-front-column-select">
+              <option value="left" selected>Left column has fronts</option>
+              <option value="right">Right column has fronts</option>
+            </select>
+          </label>
+
           <label>
-            Grid rows
+            <span id="grid-rows-label">Grid row lines</span>
             <select id="grid-rows-input">
               <option value="0">0</option>
               <option value="1">1</option>
@@ -94,7 +109,7 @@
           </label>
 
           <label>
-            Grid columns
+            <span id="grid-cols-label">Grid column lines</span>
             <select id="grid-cols-input">
               <option value="0">0</option>
               <option value="1">1</option>
@@ -148,9 +163,30 @@
         </div>
       </section>
 
+      <section class="panel" id="orientation-panel" hidden>
+        <div class="panel-head">
+          <h2>3. Card Preview/Orientation Check</h2>
+        </div>
+        <p class="workflow-tip">
+          Preview one sample front and one sample back, then rotate each type in 90° steps before building the ZIP.
+        </p>
+        <div class="orientation-grid">
+          <div class="orientation-card">
+            <h3>Front Sample</h3>
+            <canvas id="front-preview-canvas" width="180" height="240"></canvas>
+            <button id="front-rotate-btn" class="btn ghost" type="button">Rotate Front 90° (0°)</button>
+          </div>
+          <div class="orientation-card">
+            <h3>Back Sample</h3>
+            <canvas id="back-preview-canvas" width="180" height="240"></canvas>
+            <button id="back-rotate-btn" class="btn ghost" type="button">Rotate Back 90° (0°)</button>
+          </div>
+        </div>
+      </section>
+
       <section class="panel" id="export-panel" hidden>
         <div class="panel-head">
-          <h2>3. Export ZIP</h2>
+          <h2>4. Export ZIP</h2>
         </div>
         <p>
           Exports PNG files in <code>fronts/</code> and <code>backs/</code>. Duplicate backs are
@@ -168,11 +204,23 @@
       </section>
 
       <footer class="footer-note">
-        Processing happens in-browser with PDF.js, OpenCV.js, and JSZip.
+        <div class="footer-nav">
+          <a class="btn ghost nav-link" href="http://pnpfinder.com" target="_blank" rel="noopener noreferrer">PnPFinder</a>
+          <a class="btn ghost nav-link" href="https://formatter.gonzhome.us" target="_blank" rel="noopener noreferrer">Card Formatter</a>
+        </div>
+        <p>Processing happens in-browser with PDF.js and JSZip.</p>
+        <p>
+          Copyright 2026 by
+          <a href="mailto:help@pnpfinder.com?subject=Card%20Extractor%20Feedback">Martin Gonzalvez</a>.
+        </p>
+        <p>
+          <span aria-hidden="true">☕</span>
+          Like this tool? Why not
+          <a href="https://ko-fi.com/marting" target="_blank" rel="noopener noreferrer">buy me a coffee</a>?
+        </p>
       </footer>
     </main>
 
-    <script src="https://docs.opencv.org/4.x/opencv.js" async></script>
     <script type="module" src="./app.js"></script>
   </body>
 </html>
