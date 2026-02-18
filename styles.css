@@ -359,6 +359,12 @@ body[data-theme="dark"] .download {
   background: rgba(40, 36, 33, 0.92);
 }
 
+body[data-theme="light"] .btn.ghost,
+body[data-theme="light"] .download {
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--ink);
+}
+
 .download {
   text-decoration: none;
   display: inline-block;
