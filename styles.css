@@ -394,6 +394,35 @@ body[data-theme="light"] .download {
   overflow: auto;
 }
 
+.zoom-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: color-mix(in oklab, var(--panel) 86%, transparent);
+  padding: 6px 4px;
+  border-radius: 8px;
+}
+
+.zoom-label {
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.zoom-btn {
+  padding: 6px 10px;
+  min-width: 44px;
+}
+
+.zoom-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: transparent;
+}
+
 
 #page-canvas {
   display: block;
