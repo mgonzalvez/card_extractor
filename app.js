@@ -990,11 +990,14 @@ function drawGridOverlay(page) {
       ctx.textBaseline = "alphabetic";
 
 
+      const gridDash = [8, 6];
+      ctx.setLineDash(gridDash);
       ctx.strokeStyle = "rgba(35, 150, 215, 0.9)";
       ctx.lineWidth = 2.2;
       ctx.strokeRect(left, top, right - left, bottom - top);
 
       const drawControl = (cx, cy, isActive = false, scale = 1) => {
+        ctx.setLineDash([]);
         const r = (isActive ? controlR * 1.45 : controlR) * scale;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -1009,6 +1012,7 @@ function drawGridOverlay(page) {
         const x = xLines[i] * s;
         const isActive = !!active && active.axis === "x" && active.index === i;
         const isEdge = i === 0 || i === xLines.length - 1;
+        ctx.setLineDash(gridDash);
         ctx.strokeStyle = isActive ? "rgba(19,125,193,1)" : "rgba(35,150,215,0.95)";
         ctx.lineWidth = isActive ? 3.6 : 2.2;
         ctx.beginPath();
@@ -1025,6 +1029,7 @@ function drawGridOverlay(page) {
       for (let i = 0; i < yLines.length; i += 1) {
         const y = yLines[i] * s;
         const isActive = !!active && active.axis === "y" && active.index === i;
+        ctx.setLineDash(gridDash);
         ctx.strokeStyle = isActive ? "rgba(19,125,193,1)" : "rgba(35,150,215,0.95)";
         ctx.lineWidth = isActive ? 3.6 : 2.2;
         ctx.beginPath();
