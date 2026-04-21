@@ -1,1 +1,11 @@
 .DS_Store
+
+# Editor/IDE
+.vscode/
+
+# Agent context
+AGENTS.md
+
+# Local sample files
+samples/
+sample output/
