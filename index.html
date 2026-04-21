@@ -18,6 +18,9 @@
       <header class="hero">
         <div class="hero-nav">
           <button id="theme-toggle-btn" class="btn ghost nav-link" type="button" aria-label="Toggle dark mode">Dark Mode</button>
+          <a class="btn ghost nav-link" href="https://launchpad.gonzhome.us" target="_blank" rel="noopener noreferrer">Launchpad</a>
+          <a class="btn ghost nav-link" href="https://pnptools.gonzhome.us" target="_blank" rel="noopener noreferrer">PnPTools</a>
+          <a class="btn ghost nav-link" href="https://prototyper.gonzhome.us" target="_blank" rel="noopener noreferrer">Prototyper</a>
           <a class="btn ghost nav-link" href="https://formatter.gonzhome.us" target="_blank" rel="noopener noreferrer">Formatter</a>
           <a class="btn ghost nav-link" href="http://pnpfinder.com" target="_blank" rel="noopener noreferrer">PnPFinder</a>
         </div>
@@ -139,6 +142,12 @@
 
         <div class="editor-layout">
           <div class="canvas-wrap">
+            <div class="zoom-toolbar">
+              <span class="zoom-label">Zoom</span>
+              <button id="zoom-1x-btn" class="btn ghost zoom-btn active" type="button">1x</button>
+              <button id="zoom-2x-btn" class="btn ghost zoom-btn" type="button">2x</button>
+              <button id="zoom-4x-btn" class="btn ghost zoom-btn" type="button">4x</button>
+            </div>
             <canvas id="page-canvas" width="1200" height="1600"></canvas>
           </div>
           <aside class="summary-box">
@@ -206,6 +215,8 @@
       <footer class="footer-note">
         <div class="footer-nav">
           <a class="btn ghost nav-link" href="http://pnpfinder.com" target="_blank" rel="noopener noreferrer">PnPFinder</a>
+          <a class="btn ghost nav-link" href="https://pnptools.gonzhome.us" target="_blank" rel="noopener noreferrer">PnPTools</a>
+          <a class="btn ghost nav-link" href="https://prototyper.gonzhome.us" target="_blank" rel="noopener noreferrer">Prototyper</a>
           <a class="btn ghost nav-link" href="https://formatter.gonzhome.us" target="_blank" rel="noopener noreferrer">Card Formatter</a>
         </div>
         <p>Processing happens in-browser with PDF.js and JSZip.</p>
@@ -222,5 +233,6 @@
     </main>
 
     <script type="module" src="./app.js"></script>
+    <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "5ebab9b9bd18481a817be0f752692837"}'></script><!-- End Cloudflare Web Analytics -->
   </body>
 </html>

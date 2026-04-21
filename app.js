@@ -22,6 +22,7 @@ const state = {
   currentPageIdx: 0,
   selectedCardId: null,
   canvasScale: 1,
+  previewZoom: 1,
   dragState: null,
   hasActiveDocument: false,
   downloadUrl: null,
@@ -75,6 +76,9 @@ const els = {
   downloadLink: document.querySelector("#download-link"),
   singleBackToggle: document.querySelector("#single-back-toggle"),
   pageCanvas: document.querySelector("#page-canvas"),
+  zoom1xBtn: document.querySelector("#zoom-1x-btn"),
+  zoom2xBtn: document.querySelector("#zoom-2x-btn"),
+  zoom4xBtn: document.querySelector("#zoom-4x-btn"),
   selectionReadout: document.querySelector("#selection-readout"),
   workflowTip: document.querySelector("#workflow-tip"),
   themeToggleBtn: document.querySelector("#theme-toggle-btn"),
@@ -94,6 +98,34 @@ const ctx = els.pageCanvas.getContext("2d");
 function setEngineStatus(text, good = false) {
   els.engineStatus.textContent = text;
   els.engineStatus.style.color = good ? "var(--ok)" : "var(--muted)";
+}
+
+function updateZoomUi() {
+  const z = state.previewZoom || 1;
+  if (els.zoom1xBtn) els.zoom1xBtn.classList.toggle("active", z === 1);
+  if (els.zoom2xBtn) els.zoom2xBtn.classList.toggle("active", z === 2);
+  if (els.zoom4xBtn) els.zoom4xBtn.classList.toggle("active", z === 4);
+}
+
+function setPreviewZoom(level) {
+  const next = level === 4 ? 4 : level === 2 ? 2 : 1;
+  if (state.previewZoom === next) return;
+  const wrap = els.pageCanvas.parentElement;
+  const maxX = Math.max(1, (wrap?.scrollWidth || 1) - (wrap?.clientWidth || 1));
+  const maxY = Math.max(1, (wrap?.scrollHeight || 1) - (wrap?.clientHeight || 1));
+  const ratioX = wrap ? wrap.scrollLeft / maxX : 0;
+  const ratioY = wrap ? wrap.scrollTop / maxY : 0;
+  state.previewZoom = next;
+  drawCurrentPage();
+  updateZoomUi();
+  if (wrap) {
+    requestAnimationFrame(() => {
+      const nx = Math.max(0, wrap.scrollWidth - wrap.clientWidth);
+      const ny = Math.max(0, wrap.scrollHeight - wrap.clientHeight);
+      wrap.scrollLeft = nx * ratioX;
+      wrap.scrollTop = ny * ratioY;
+    });
+  }
 }
 
 function resolveInitialTheme() {
@@ -283,6 +315,8 @@ async function loadPdf(file) {
   state.pages = [];
   state.currentPageIdx = 0;
   state.selectedCardId = null;
+  state.previewZoom = 1;
+  updateZoomUi();
   state.exportRotation.front = 0;
   state.exportRotation.back = 0;
   state.gridSlicer.active = false;
@@ -956,11 +990,14 @@ function drawGridOverlay(page) {
       ctx.textBaseline = "alphabetic";
 
 
+      const gridDash = [8, 6];
+      ctx.setLineDash(gridDash);
       ctx.strokeStyle = "rgba(35, 150, 215, 0.9)";
       ctx.lineWidth = 2.2;
       ctx.strokeRect(left, top, right - left, bottom - top);
 
       const drawControl = (cx, cy, isActive = false, scale = 1) => {
+        ctx.setLineDash([]);
         const r = (isActive ? controlR * 1.45 : controlR) * scale;
         ctx.beginPath();
         ctx.arc(cx, cy, r, 0, Math.PI * 2);
@@ -975,6 +1012,7 @@ function drawGridOverlay(page) {
         const x = xLines[i] * s;
         const isActive = !!active && active.axis === "x" && active.index === i;
         const isEdge = i === 0 || i === xLines.length - 1;
+        ctx.setLineDash(gridDash);
         ctx.strokeStyle = isActive ? "rgba(19,125,193,1)" : "rgba(35,150,215,0.95)";
         ctx.lineWidth = isActive ? 3.6 : 2.2;
         ctx.beginPath();
@@ -991,6 +1029,7 @@ function drawGridOverlay(page) {
       for (let i = 0; i < yLines.length; i += 1) {
         const y = yLines[i] * s;
         const isActive = !!active && active.axis === "y" && active.index === i;
+        ctx.setLineDash(gridDash);
         ctx.strokeStyle = isActive ? "rgba(19,125,193,1)" : "rgba(35,150,215,0.95)";
         ctx.lineWidth = isActive ? 3.6 : 2.2;
         ctx.beginPath();
@@ -1117,7 +1156,7 @@ function drawCurrentPage() {
   const wrapW = wrap ? Math.max(260, wrap.clientWidth - padX) : window.innerWidth - 36;
   const viewportW = Math.max(320, window.innerWidth - 36);
   const availableW = Math.min(wrapW, viewportW);
-  const fit = Math.max(0.1, availableW / page.canvas.width);
+  const fit = Math.max(0.1, (availableW / page.canvas.width) * (state.previewZoom || 1));
   state.canvasScale = fit;
 
   els.pageCanvas.width = Math.max(1, Math.round(page.canvas.width * fit));
@@ -1441,6 +1480,9 @@ async function exportZip() {
   setBusy(false);
 }
 function bindEvents() {
+  if (els.zoom1xBtn) els.zoom1xBtn.addEventListener("click", () => setPreviewZoom(1));
+  if (els.zoom2xBtn) els.zoom2xBtn.addEventListener("click", () => setPreviewZoom(2));
+  if (els.zoom4xBtn) els.zoom4xBtn.addEventListener("click", () => setPreviewZoom(4));
   if (els.themeToggleBtn) {
     els.themeToggleBtn.addEventListener("click", () => {
       const cur = document.body.getAttribute("data-theme") === "dark" ? "dark" : "light";
