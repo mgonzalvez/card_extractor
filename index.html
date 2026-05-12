@@ -233,6 +233,16 @@
       </footer>
     </main>
 
+    <!-- Polyfill: Promise.withResolvers (ES2024) — needed by PDF.js v4 on older browsers -->
+    <script>
+      if (!Promise.withResolvers) {
+        Promise.withResolvers = function () {
+          let resolve, reject;
+          const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
+          return { promise, resolve, reject };
+        };
+      }
+    </script>
     <script type="module" src="./app.js"></script>
     <!-- Cloudflare Web Analytics --><script defer src='https://static.cloudflareinsights.com/beacon.min.js' data-cf-beacon='{"token": "5ebab9b9bd18481a817be0f752692837"}'></script><!-- End Cloudflare Web Analytics -->
   </body>
