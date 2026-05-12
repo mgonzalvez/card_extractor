@@ -4,7 +4,7 @@
 Private, in-browser web app for extracting individual card images from printable PnP PDF layouts. Grid-first workflow: build one accurate grid on a reference page and apply it across the entire document. Client-side only (PDF.js + JSZip), no backend. Deployed to GitHub Pages.
 
 ## Files
-- `index.html` — UI markup (upload panels, grid controls, canvas preview, orientation check, export ZIP)
+- `index.html` — UI markup (upload panels, grid controls, canvas preview, orientation check, export ZIP, and compatibility polyfills)
 - `styles.css` — Visual styling (responsive layout, light/dark themes, animated bg orbs)
 - `app.js` — Core logic (1793 lines): PDF rendering via PDF.js, grid slicing, ZIP export via JSZip, ES module
 
@@ -56,6 +56,7 @@ Shared in a single `state` object:
 
 ## Coding Conventions
 - ES module (`<script type="module">`); imports PDF.js and JSZip from CDN
+- Includes polyfills (e.g., `Promise.withResolvers`) for compatibility with modern web APIs on older browsers
 - Single `state` object for all app state
 - Single `els` object for all DOM element references
 - `makeCard()` creates card objects with id/x/y/w/h/label/rotation/source
