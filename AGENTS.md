@@ -6,12 +6,13 @@ Private, in-browser web app for extracting individual card images from printable
 ## Files
 - `index.html` — UI markup (upload panels, grid controls, canvas preview, orientation check, export ZIP, and compatibility polyfills)
 - `styles.css` — Visual styling (responsive layout, light/dark themes, animated bg orbs)
-- `app.js` — Core logic (1793 lines): PDF rendering via PDF.js, grid slicing, ZIP export via JSZip, ES module
+- `app.js` — Core logic (1845 lines): PDF rendering via PDF.js, grid slicing, ZIP export via JSZip, ES module
 
 ## Code Architecture
 
 ### Constants
-- `CARD_PRESETS` — poker (2.5×3.5"), tarot (2.75×4.75"), mini (1.75×2.5")
+- `CARD_PRESETS` — poker (2.5×3.5"), square (2.5×2.5"), bridge (2.25×3.5"), euro (2.32×3.62"), mini (1.75×2.5"), tarot (2.75×4.75")
+- `SIZE_ENTRIES` — array of {key, label} objects for dynamic dropdown population
 - `WORKFLOW_DEFAULTS` — duplex (3×3), gutterfold (4×2)
 - `THEME_STORAGE_KEY = "cardExtractorTheme"`
 - `POINTS_PER_IN = 72` — PDF coordinate units (inherited from pdf-lib convention)
@@ -59,9 +60,11 @@ Shared in a single `state` object:
 - `applyGridToAllPages()` — clones reference grid across all pages, produces card rects for each
 - `exportZip()` — builds ZIP with `fronts/` and `backs/` folders, handles single-back dedup, progress UI
 - `renderPreviewCanvas(targetCanvas, sample, label)` — draws front/back sample in orientation check panel
-- `cropCardToCanvas(pageCanvas, card, bleedPx)` — crops a card region to canvas
+- `cropCardToCanvas(pageCanvas, card, bleedPx)` — crops a card region to canvas (uses `alpha: true` for transparent PDF elements)
 - `rotateCanvasByDegrees(canvas, degrees)` — rotates canvas content
-- `resizeOutput(canvas, preset)` — resizes to preset dimensions (poker/tarot/mini)
+- `resizeOutput(canvas, preset)` — resizes to preset dimensions (poker/square/bridge/euro/mini/tarot) using high-quality smoothing
+- `formatSizeLabel(size, useMetric)` — formats card dimensions as imperial (e.g., `2.50" × 3.50"`) or metric (e.g., `63.5 × 88.9 mm`)
+- `populateSizePresetOptions()` — dynamically populates the size preset dropdown with formatted labels
 - `simpleHashCanvas(canvas)` — generates hash for back image deduplication
 - `updateActionStates()` — enables/disables Apply Grid and Export buttons based on grid readiness
 - `updateGridReadout()` — updates card count display
@@ -85,6 +88,12 @@ Shared in a single `state` object:
 6. Orientation check → `renderPreviewCanvas()` + 90° rotation controls for front/back
 7. Export → `exportZip()` → PNG crop (`cropCardToCanvas`) / rotate (`rotateCanvasByDegrees`) / resize (`resizeOutput`) → JSZip blob → download link
 
+### Image Fidelity
+- PDF pages rendered at 3.5× scale (~252 DPI) for high-resolution card extraction
+- Canvas context uses `alpha: true` to preserve transparent PDF elements
+- PNG export via `toBlob("image/png")` is always lossless (no quality parameter)
+- `resizeOutput` uses `imageSmoothingQuality = "high"` for preset sizes; "native" skips resize entirely for perfect fidelity
+
 ### UI Update Chain
 `bindEvents()` wires all controls. Structure controls (rows/cols) trigger `rebuildGridStructureFromControls()` → `refreshGridPreview({ rebuildStructure: true })`. `updateActionStates()` disables/enables Apply Grid and Export buttons based on grid readiness. `updateGridReadout()` updates card count display. `updateZoomUi()` highlights active zoom button.
 
@@ -92,7 +101,7 @@ Shared in a single `state` object:
 - ES module (`<script type="module">`); imports PDF.js and JSZip from CDN
 - Includes polyfills (e.g., `Promise.withResolvers`) for compatibility with modern web APIs on older browsers
 - Single `state` object for all app state
-- Single `els` object for all DOM element references (38 elements)
+- Single `els` object for all DOM element references (40 elements, includes `unitToggle` and `unitLabel`)
 - `ctx` — shared 2D canvas context from `els.pageCanvas`
 - `makeCard(rect, label, source)` creates card objects with id/x/y/w/h/label/rotation/source
 - `pageRoleByIndex(index, total, workflowType)` auto-assigns front/back/role for duplex workflow
