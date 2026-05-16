@@ -310,13 +310,13 @@ function makeCard(rect, label = "front", source = "auto") {
   };
 }
 
-async function renderPdfPage(pageNumber, scale = 2.25) {
+async function renderPdfPage(pageNumber, scale = 3.5) {
   const page = await state.pdfDoc.getPage(pageNumber);
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(viewport.width);
   canvas.height = Math.round(viewport.height);
-  const rctx = canvas.getContext("2d", { alpha: false });
+  const rctx = canvas.getContext("2d", { alpha: true });
   await page.render({ canvasContext: rctx, viewport }).promise;
   return { canvas, page, viewport };
 }
@@ -406,7 +406,7 @@ function hydratePageOptions() {
 async function ensurePageCanvas(pageIdx) {
   const pageModel = state.pages[pageIdx];
   if (!pageModel.canvas) {
-    const { canvas } = await renderPdfPage(pageModel.number, 2.35);
+    const { canvas } = await renderPdfPage(pageModel.number, 3.5);
     pageModel.canvas = canvas;
     pageModel.pxPerPt = canvas.width / pageModel.widthPts;
   }
@@ -1361,7 +1361,6 @@ function canvasToPngBlob(canvas) {
         else resolve(blob);
       },
       "image/png",
-      0.95,
     );
   });
 }
