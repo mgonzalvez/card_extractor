@@ -21,49 +21,86 @@ Shared in a single `state` object:
 - `pdfDoc` — loaded PDF document
 - `pages[]` — array of page objects with rendered canvas and card rects
 - `currentPageIdx` — active preview page
+- `selectedCardId` — currently selected card ID
+- `canvasScale` — current canvas scale factor
+- `previewZoom` — zoom level (1, 2, or 4)
+- `dragState` — active drag state for grid manipulation
+- `hasActiveDocument` — whether a PDF is loaded
+- `downloadUrl` — download link for exported ZIP
+- `lastPointerType` — "mouse" or "touch"
 - `workflowType` — "duplex" or "gutterfold"
 - `gutterfoldFrontColumn` — "left" or "right"
 - `exportRotation` — { front: 0-360, back: 0-360 }
-- `gridSlicer` — full grid editor state: active/bounds/xNorm/yNorm/linePositions/bandTypes/cellTypes
+- `gridSlicer` — full grid editor state:
+  - `active` — grid is active
+  - `awaitingBounds` — waiting for user to draw bounds
+  - `showSlices` — show card slice outlines
+  - `refPageIdx` — reference page index
+  - `boundsNorm` — normalized bounds {x, y, w, h}
+  - `xNorm`/`yNorm` — normalized line positions (0-1)
+  - `xLines`/`yLines` — pixel line positions
+  - `activeLine` — currently dragged line
+  - `colTypes`/`rowTypes` — gutter band types per column/row
+  - `bandHits` — gutter band detection scores {cols, rows}
+  - `cellTypes` — cell classification grid (card/gutter)
 
 ### Core Functions
-- `loadPdf()` — main entry point: reads file to ArrayBuffer, creates pdfDoc, instantiates pages, UI unlock
+- `loadPdf(file)` — main entry point: reads file to ArrayBuffer, creates pdfDoc, instantiates pages, UI unlock
+- `onPdfSelected(workflowType)` — file input handler, triggers loadPdf
 - `applyWorkflowDefaults()` — sets rows/cols based on duplex or gutterfold
+- `setWorkflowType(type)` — switches duplex/gutterfold, re-applies grid
 - `initGridFromBounds(bounds)` — creates normalized grid from user-drawn box + row/col inputs
 - `denormalizeGridForPage(pageIdx)` — converts normalized grid → pixel coords for a specific page
-- `applyGridToPage(pageIdx, xLines, yLines)` — slices one page into card rects using grid lines
+- `getRefGridBoundsPx()` — converts normalized bounds → pixel coords for reference page
+- `rebuildGridStructureFromControls()` — rebuilds grid from rows/cols inputs
+- `createLines(start, cell, gutter, count)` — generates line positions
+- `createGridLinesWithinBounds(bounds, inputs)` — creates x/y line arrays within bounds
+- `applyGridToPage(pageIdx, xLines, yLines, updateNorm)` — slices one page into card rects using grid lines
 - `applyGridToAllPages()` — clones reference grid across all pages, produces card rects for each
 - `exportZip()` — builds ZIP with `fronts/` and `backs/` folders, handles single-back dedup, progress UI
-- `renderPreviewCanvas()` — draws front/back sample in orientation check panel
-- `cropCardToCanvas()`, `rotateCanvasByDegrees()`, `resizeOutput()` — card image processing
+- `renderPreviewCanvas(targetCanvas, sample, label)` — draws front/back sample in orientation check panel
+- `cropCardToCanvas(pageCanvas, card, bleedPx)` — crops a card region to canvas
+- `rotateCanvasByDegrees(canvas, degrees)` — rotates canvas content
+- `resizeOutput(canvas, preset)` — resizes to preset dimensions (poker/tarot/mini)
+- `simpleHashCanvas(canvas)` — generates hash for back image deduplication
+- `updateActionStates()` — enables/disables Apply Grid and Export buttons based on grid readiness
+- `updateGridReadout()` — updates card count display
+- `getCardCount()` — returns total card count across all pages
+- `setBusy(on, label)` — shows/hides busy overlay with label
+- `setZipProgress(progress, label, active)` — updates export progress bar
+- `setEngineStatus(text, good)` — sets status bar text and color
 
 ### Gutterfold-Specific Features
-- `detectVerticalGutterBand()` / `detectHorizontalGutterBand()` — auto-detects thin white bands between columns/rows
-- `applyGutterfoldAutoBands()` — marks detected gutter bands; user can click missed bands to mark manually
-- `resolveGutterfoldColumnRoles()` — determines which columns are front vs back based on selected column
+- `detectVerticalGutterBand(img, dividerX, top, bottom, halfWidth)` — scans vertical band for white gap
+- `detectHorizontalGutterBand(img, dividerY, left, right, halfHeight)` — scans horizontal band for white gap
+- `applyGutterfoldAutoBands(page, bounds, lines)` — marks detected gutter bands; user can click missed bands to mark manually via `hitTestBandToggle()`
+- `resolveGutterfoldColumnRoles(cellTypes, cols)` — determines which columns are front vs back based on `state.gutterfoldFrontColumn`
 
 ### Event Flow
-1. Upload `onPdfSelected()` → `loadPdf()` → `state.pages[]` → `hydratePageOptions()`
-2. Draw grid bounds → `initGridFromBounds()` → `gridSlicer.active = true`
+1. Upload `onPdfSelected(workflowType)` → `loadPdf(file)` → `state.pages[]` → `hydratePageOptions()`
+2. Draw grid bounds → `initGridFromBounds(bounds)` → `gridSlicer.active = true`
 3. Drag grid lines → `pointermove` updates `gridSlicer.xNorm/yNorm` → `drawCurrentPage()` redraws overlay
-4. Click regions → `hitTestBandToggle()` → toggle cellTypes (card/gutter)
+4. Click regions → `hitTestBandToggle(mx, my)` → toggle cellTypes (card/gutter)
 5. Apply grid → `applyGridToAllPages()` → card rects on every page
 6. Orientation check → `renderPreviewCanvas()` + 90° rotation controls for front/back
-7. Export → `exportZip()` → PNG crop/rotate/resize → JSZip blob → download link
+7. Export → `exportZip()` → PNG crop (`cropCardToCanvas`) / rotate (`rotateCanvasByDegrees`) / resize (`resizeOutput`) → JSZip blob → download link
 
 ### UI Update Chain
-`bindEvents()` wires all controls. Structure controls (rows/cols) trigger `refreshGridPreview({ rebuildStructure: true })`. `updateActionStates()` disables/enables Apply Grid and Export buttons based on grid readiness.
+`bindEvents()` wires all controls. Structure controls (rows/cols) trigger `rebuildGridStructureFromControls()` → `refreshGridPreview({ rebuildStructure: true })`. `updateActionStates()` disables/enables Apply Grid and Export buttons based on grid readiness. `updateGridReadout()` updates card count display. `updateZoomUi()` highlights active zoom button.
 
 ## Coding Conventions
 - ES module (`<script type="module">`); imports PDF.js and JSZip from CDN
 - Includes polyfills (e.g., `Promise.withResolvers`) for compatibility with modern web APIs on older browsers
 - Single `state` object for all app state
-- Single `els` object for all DOM element references
-- `makeCard()` creates card objects with id/x/y/w/h/label/rotation/source
-- `pageRoleByIndex()` auto-assigns front/back/role for duplex workflow
+- Single `els` object for all DOM element references (38 elements)
+- `ctx` — shared 2D canvas context from `els.pageCanvas`
+- `makeCard(rect, label, source)` creates card objects with id/x/y/w/h/label/rotation/source
+- `pageRoleByIndex(index, total, workflowType)` auto-assigns front/back/role for duplex workflow
 - Pointer events (pointerdown/move/up/cancel) for grid line dragging and bounds drawing
 - Theme toggle saves to localStorage, resolves on init
-- css classes use `is-disabled` patterns on buttons
+- CSS classes use `is-disabled` patterns on buttons
+- All async functions use `async/await` pattern
+- Helper functions prefixed with `get`, `create`, `detect`, `apply`, `update`, `set`
 
 ## Key Patterns
 - Grid lines stored in normalized (0-1) coords → denormalized to pixels per page for accurate slicing
