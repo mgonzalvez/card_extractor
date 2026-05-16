@@ -5,10 +5,35 @@ pdfjsLib.GlobalWorkerOptions.workerSrc =
   "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs";
 
 const CARD_PRESETS = {
-  poker: { widthIn: 2.5, heightIn: 3.5 },
-  tarot: { widthIn: 2.75, heightIn: 4.75 },
-  mini: { widthIn: 1.75, heightIn: 2.5 },
+  poker: { wIn: 2.5, hIn: 3.5 },
+  square: { wIn: 2.5, hIn: 2.5 },
+  bridge: { wIn: 2.25, hIn: 3.5 },
+  euro: { wIn: 2.32, hIn: 3.62 },
+  mini: { wIn: 1.75, hIn: 2.5 },
+  tarot: { wIn: 2.75, hIn: 4.75 },
 };
+
+const SIZE_ENTRIES = [
+  { key: "poker", label: "Poker" },
+  { key: "square", label: "Square" },
+  { key: "bridge", label: "Bridge" },
+  { key: "euro", label: "Euro" },
+  { key: "mini", label: "Mini" },
+  { key: "tarot", label: "Tarot" },
+];
+
+function formatSizeLabel(size, useMetric) {
+  const fmt = (v, d = 1) => {
+    const fixed = v.toFixed(d);
+    return fixed.endsWith(".0") ? fixed.slice(0, -2) : fixed;
+  };
+  if (useMetric) {
+    const w = fmt(size.wIn * 25.4, 1);
+    const h = fmt(size.hIn * 25.4, 1);
+    return `${w} × ${h} mm`;
+  }
+  return `${fmt(size.wIn, 2)}" × ${fmt(size.hIn, 2)}"`;
+}
 
 const WORKFLOW_DEFAULTS = {
   duplex: { rows: 3, cols: 3 },
@@ -82,6 +107,8 @@ const els = {
   selectionReadout: document.querySelector("#selection-readout"),
   workflowTip: document.querySelector("#workflow-tip"),
   themeToggleBtn: document.querySelector("#theme-toggle-btn"),
+  unitToggle: document.querySelector("#unit-toggle"),
+  unitLabel: document.querySelector("#unit-label"),
   frontPreviewCanvas: document.querySelector("#front-preview-canvas"),
   backPreviewCanvas: document.querySelector("#back-preview-canvas"),
   frontRotateBtn: document.querySelector("#front-rotate-btn"),
@@ -1297,8 +1324,8 @@ function resizeOutput(canvas, preset) {
   if (!conf) return canvas;
   const dpi = 300;
   const out = document.createElement("canvas");
-  out.width = Math.round(conf.widthIn * dpi);
-  out.height = Math.round(conf.heightIn * dpi);
+  out.width = Math.round(conf.wIn * dpi);
+  out.height = Math.round(conf.hIn * dpi);
   const rctx = out.getContext("2d");
   rctx.imageSmoothingEnabled = true;
   rctx.imageSmoothingQuality = "high";
@@ -1404,6 +1431,7 @@ async function exportZip() {
 
   const bleedIn = 0;
   const preset = els.sizePresetSelect.value;
+  const useMetric = !!els.unitToggle?.checked;
   const singleBackOnly = !!els.singleBackToggle?.checked;
 
   let frontIndex = 1;
@@ -1773,6 +1801,30 @@ function bindEvents() {
     els.pageCanvas.style.cursor = "default";
   });
 
+  if (els.unitToggle) {
+    els.unitToggle.addEventListener("change", () => {
+      populateSizePresetOptions();
+    });
+  }
+}
+
+function populateSizePresetOptions() {
+  const useMetric = !!els.unitToggle?.checked;
+  if (!els.sizePresetSelect) return;
+  const current = els.sizePresetSelect.value;
+  els.sizePresetSelect.innerHTML = "";
+  const nativeOpt = document.createElement("option");
+  nativeOpt.value = "native";
+  nativeOpt.textContent = "Native (detected)";
+  els.sizePresetSelect.appendChild(nativeOpt);
+  SIZE_ENTRIES.forEach((entry) => {
+    const size = CARD_PRESETS[entry.key];
+    const opt = document.createElement("option");
+    opt.value = entry.key;
+    opt.textContent = `${entry.label} (${formatSizeLabel(size, useMetric)})`;
+    els.sizePresetSelect.appendChild(opt);
+  });
+  els.sizePresetSelect.value = current || "poker";
 }
 async function init() {
   try {
@@ -1780,6 +1832,7 @@ async function init() {
     setEngineStatus("Loading engines…");
     setWorkflowType("duplex");
     updateUploadLockUi();
+    populateSizePresetOptions();
     bindEvents();
     updateGridReadout();
     updateActionStates();
