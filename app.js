@@ -107,6 +107,8 @@ const els = {
   selectionReadout: document.querySelector("#selection-readout"),
   workflowTip: document.querySelector("#workflow-tip"),
   themeToggleBtn: document.querySelector("#theme-toggle-btn"),
+  themeColorMeta: document.querySelector("#theme-color-meta"),
+  relatedSitesMenu: document.querySelector("#related-sites-menu"),
   unitToggle: document.querySelector("#unit-toggle"),
   unitLabel: document.querySelector("#unit-label"),
   frontPreviewCanvas: document.querySelector("#front-preview-canvas"),
@@ -156,19 +158,33 @@ function setPreviewZoom(level) {
 }
 
 function resolveInitialTheme() {
-  const saved = localStorage.getItem(THEME_STORAGE_KEY);
+  let saved = null;
+  try {
+    saved = localStorage.getItem(THEME_STORAGE_KEY);
+  } catch (error) {
+    // System appearance remains available when storage is blocked.
+  }
   if (saved === "light" || saved === "dark") return saved;
   return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
 function applyTheme(theme) {
   const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  document.documentElement.style.colorScheme = next;
   document.body.setAttribute("data-theme", next);
-  localStorage.setItem(THEME_STORAGE_KEY, next);
+  try {
+    localStorage.setItem(THEME_STORAGE_KEY, next);
+  } catch (error) {
+    // Appearance still changes when storage is unavailable.
+  }
+  if (els.themeColorMeta) {
+    els.themeColorMeta.content = next === "dark" ? "#090b10" : "#f4f7fb";
+  }
   if (els.themeToggleBtn) {
-    const label = next === "dark" ? "Light Mode" : "Dark Mode";
-    els.themeToggleBtn.textContent = label;
+    const label = next === "dark" ? "Switch to light mode" : "Switch to dark mode";
     els.themeToggleBtn.setAttribute("aria-label", label);
+    els.themeToggleBtn.title = label;
   }
 }
 
@@ -1004,7 +1020,7 @@ function drawGridOverlay(page) {
             ctx.fillStyle = type === "gutter" ? "rgba(255,138,76,0.24)" : "rgba(35,150,215,0.14)";
             ctx.fillRect(x1, y1, x2 - x1, y2 - y1);
             ctx.fillStyle = type === "gutter" ? "rgba(228,97,43,0.95)" : "rgba(24,120,184,0.96)";
-            ctx.font = "700 12px Space Grotesk";
+            ctx.font = '700 12px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             if (!isGutterfoldMode() || type === "gutter") {
@@ -1382,7 +1398,7 @@ function renderPreviewCanvas(targetCanvas, sample, label) {
   pctx.fillRect(0, 0, targetCanvas.width, targetCanvas.height);
   if (!sample) {
     pctx.fillStyle = "#6a5b4e";
-    pctx.font = "600 13px Space Grotesk";
+    pctx.font = '600 13px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif';
     pctx.textAlign = "center";
     pctx.textBaseline = "middle";
     pctx.fillText("No " + label + " sample yet", targetCanvas.width / 2, targetCanvas.height / 2);
@@ -1512,8 +1528,26 @@ function bindEvents() {
   if (els.zoom4xBtn) els.zoom4xBtn.addEventListener("click", () => setPreviewZoom(4));
   if (els.themeToggleBtn) {
     els.themeToggleBtn.addEventListener("click", () => {
-      const cur = document.body.getAttribute("data-theme") === "dark" ? "dark" : "light";
+      const cur = document.documentElement.dataset.theme === "dark" ? "dark" : "light";
       applyTheme(cur === "dark" ? "light" : "dark");
+    });
+  }
+  if (els.relatedSitesMenu) {
+    document.addEventListener("click", (event) => {
+      if (els.relatedSitesMenu.open && !els.relatedSitesMenu.contains(event.target)) {
+        els.relatedSitesMenu.open = false;
+      }
+    });
+    els.relatedSitesMenu.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        els.relatedSitesMenu.open = false;
+        els.relatedSitesMenu.querySelector("summary")?.focus();
+      }
+    });
+    els.relatedSitesMenu.querySelectorAll(".related-sites-panel a").forEach((link) => {
+      link.addEventListener("click", () => {
+        els.relatedSitesMenu.open = false;
+      });
     });
   }
   const onPdfSelected = (workflowType) => async (ev) => {
