@@ -236,3 +236,11 @@ shipping a change:
 5. Test both light and dark themes and at least one touch-sized viewport.
 6. Open and dismiss the Related Sites menu with pointer, outside click, Escape,
    and a narrow mobile viewport.
+
+## Registry & provenance rule (portfolio-wide)
+
+Personal project — completely separate from Apple work.
+
+- `.npmrc` pins `registry=https://registry.npmjs.org`. Never let Apple's internal npm mirror (`npm.apple.com`, `artifacts.apple.com/artifactory/...`) end up in `package-lock.json`; GitHub Actions can't reach it and CI fails with `ENOTFOUND`.
+- Audit before pushing: `../scripts/check-registry.sh` (add `--fix` to normalize).
+- No work credentials, internal hostnames, proprietary assets, or confidential material in this repo.
